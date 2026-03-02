@@ -18,7 +18,7 @@
     <description>Administrative tool for managing the BMX Ireland member database</description>
 
     <properties>
-        <java.version>17</java.version>
+        <java.version>21</java.version>
         <poi.version>5.2.5</poi.version>
     </properties>
 
