@@ -79,9 +79,14 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
 
     private void printBanner() {
         System.out.println();
-        System.out.println("╔══════════════════════════════════════════════════╗");
-        System.out.println("║     BMX Ireland - National Database Manager      ║");
-        System.out.println("╚══════════════════════════════════════════════════╝");
+        System.out.println("    ╭──────╮");
+        System.out.println("   ╱  ╱╲    ╲    ╔════════════════════════════════╗");
+        System.out.println("  │  ╱  ╲    │   ║  C Y C L I N G  I R E L A N D  ║");
+        System.out.println("  │          │   ╚════════════════════════════════╝");
+        System.out.println("   ╲        ╱        National Database Manager");
+        System.out.println("    ╰──╮──╯");
+        System.out.println("       ╰");
+        System.out.println();
     }
 
     private void printMainMenu() {
