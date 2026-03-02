@@ -68,3 +68,4 @@ nbdist/
 
 # Project specific
 MemberDatabase.xlsx
+/target
