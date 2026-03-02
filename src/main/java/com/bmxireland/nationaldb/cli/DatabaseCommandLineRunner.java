@@ -1,23 +1,24 @@
 package com.bmxireland.nationaldb.cli;
 
-import com.bmxireland.nationaldb.model.Member;
-import com.bmxireland.nationaldb.service.DatabaseService;
-import com.bmxireland.nationaldb.service.ValidationService;
-import com.bmxireland.nationaldb.service.ValidationService.ValidationIssue;
+import java.io.IOException;
+import java.util.List;
+import java.util.Scanner;
+import java.util.stream.Collectors;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Scanner;
-import java.util.stream.Collectors;
+import com.bmxireland.nationaldb.model.Member;
+import com.bmxireland.nationaldb.service.DatabaseService;
+import com.bmxireland.nationaldb.service.ValidationService;
+import com.bmxireland.nationaldb.service.ValidationService.ValidationIssue;
 
 /**
  * Command-line interface for the BMX Ireland National Database application.
- * Loads the database on startup, runs validations, and presents an interactive menu.
+ * Loads the database on startup, runs validations, and presents an interactive
+ * menu.
  */
 @Component
 public class DatabaseCommandLineRunner implements CommandLineRunner {
@@ -38,8 +39,6 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
     @Override
     public void run(String... args) {
         Scanner scanner = new Scanner(System.in);
-
-        printBanner();
 
         // Load database
         try {
@@ -77,18 +76,6 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
 
     // ---- Menu display ----
 
-    private void printBanner() {
-        System.out.println();
-        System.out.println("    ╭──────╮");
-        System.out.println("   ╱  ╱╲    ╲    ╔════════════════════════════════╗");
-        System.out.println("  │  ╱  ╲    │   ║  C Y C L I N G  I R E L A N D  ║");
-        System.out.println("  │          │   ╚════════════════════════════════╝");
-        System.out.println("   ╲        ╱        National Database Manager");
-        System.out.println("    ╰──╮──╯");
-        System.out.println("       ╰");
-        System.out.println();
-    }
-
     private void printMainMenu() {
         System.out.println();
         System.out.println("═══════════════ Main Menu ═══════════════");
@@ -110,7 +97,8 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
     private void searchAndViewMember(Scanner scanner) {
         System.out.print("\nSearch by name or license number: ");
         String query = scanner.nextLine().trim();
-        if (query.isEmpty()) return;
+        if (query.isEmpty())
+            return;
 
         List<Member> results = searchMembers(query);
         if (results.isEmpty()) {
@@ -130,7 +118,8 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
 
         System.out.print("Select member number to view details (or Enter to go back): ");
         String selection = scanner.nextLine().trim();
-        if (selection.isEmpty()) return;
+        if (selection.isEmpty())
+            return;
 
         try {
             int idx = Integer.parseInt(selection) - 1;
@@ -147,7 +136,8 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
     private void updateMember(Scanner scanner) {
         System.out.print("\nSearch for member to update (name or license number): ");
         String query = scanner.nextLine().trim();
-        if (query.isEmpty()) return;
+        if (query.isEmpty())
+            return;
 
         List<Member> results = searchMembers(query);
         if (results.isEmpty()) {
@@ -193,7 +183,8 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
         }
         System.out.print("Select field number (or Enter to cancel): ");
         String fieldSelection = scanner.nextLine().trim();
-        if (fieldSelection.isEmpty()) return;
+        if (fieldSelection.isEmpty())
+            return;
 
         try {
             int fieldIdx = Integer.parseInt(fieldSelection) - 1;
@@ -277,12 +268,16 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
 
             switch (cmd) {
                 case "N" -> {
-                    if (currentPage < totalPages - 1) currentPage++;
-                    else System.out.println("Already on last page.");
+                    if (currentPage < totalPages - 1)
+                        currentPage++;
+                    else
+                        System.out.println("Already on last page.");
                 }
                 case "P" -> {
-                    if (currentPage > 0) currentPage--;
-                    else System.out.println("Already on first page.");
+                    if (currentPage > 0)
+                        currentPage--;
+                    else
+                        System.out.println("Already on first page.");
                 }
                 case "Q", "" -> {
                     return;

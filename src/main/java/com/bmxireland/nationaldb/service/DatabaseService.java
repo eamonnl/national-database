@@ -65,7 +65,7 @@ public class DatabaseService {
             Row row = sheet.getRow(i);
             if (row != null) {
                 String firstCell = getCellStringValue(row.getCell(0));
-                if (HEADER_DELIMITER.equals(firstCell.trim())) {
+                if (HEADER_DELIMITER.equals(firstCell)) {
                     if (firstDelimiterRow == -1) {
                         firstDelimiterRow = i;
                     } else {
