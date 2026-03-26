@@ -175,6 +175,36 @@ class MemberServiceTest {
         assertEquals("202", members.get(1).getPlate20());
     }
 
+    @Test
+    void bulkUpdate_equalsFormat_appliesUpdate() {
+        List<Member> members = List.of(member("LIC001", "Alice", "Smith", "101", "2025-12-31"));
+
+        var result = memberService.bulkUpdatePlate20(members, List.of("Alice Smith             = 720"));
+
+        assertEquals(1, result.applied().size());
+        assertEquals("720", members.get(0).getPlate20());
+    }
+
+    @Test
+    void bulkUpdate_equalsFormat_extraInternalSpacesNormalised() {
+        List<Member> members = List.of(member("LIC001", "Alice", "Smith", "101", "2025-12-31"));
+
+        // Double space inside name mirrors paste from external source
+        var result = memberService.bulkUpdatePlate20(members, List.of("Alice  Smith  =  720"));
+
+        assertEquals(1, result.applied().size());
+        assertEquals("720", members.get(0).getPlate20());
+    }
+
+    @Test
+    void bulkUpdate_equalsFormatNoDigits_isSkipped() {
+        var result = memberService.bulkUpdatePlate20(sampleMembers(), List.of("Alice Smith ="));
+
+        assertEquals(0, result.applied().size());
+        assertEquals(1, result.skipped().size());
+        assertTrue(result.skipped().get(0).reason().contains("No plate number"));
+    }
+
     // ---- getAvailableRaceNumbers ----
 
     @Test
@@ -329,8 +359,8 @@ class MemberServiceTest {
 
         assertEquals(1, result.updated().size());
         assertEquals("licence number", result.updated().get(0).matchMethod());
-        // MID should be backfilled since it was empty
-        assertEquals("MID-200", existing.getInternationalLicense());
+        // MID is not written to International License
+        assertNull(existing.getInternationalLicense());
     }
 
     @Test
@@ -345,7 +375,7 @@ class MemberServiceTest {
         assertEquals(1, result.updated().size());
         assertEquals("name + DOB", result.updated().get(0).matchMethod());
         assertEquals("26U001", existing.getLicenseNumber());
-        assertEquals("MID-300", existing.getInternationalLicense());
+        assertNull(existing.getInternationalLicense());
     }
 
     @Test
@@ -375,7 +405,7 @@ class MemberServiceTest {
         assertEquals("Bob", added.getGivenName());
         assertEquals("Jones", added.getFamilyName());
         assertEquals("26U001", added.getLicenseNumber());
-        assertEquals("MID-400", added.getInternationalLicense());
+        assertNull(added.getInternationalLicense());
         assertEquals("M", added.getGender());
         assertEquals("Yes", added.getActive());
     }
@@ -433,6 +463,86 @@ class MemberServiceTest {
         assertFalse(memberService.search(List.of(m), "jayden oconnell").isEmpty());
     }
 
+    // ---- import family name separator normalisation ----
+
+    private RegistrationEntry entryWithLastName(String lastName) {
+        return new RegistrationEntry("Club", "2026-01-01", "2026-12-31",
+                "26U001", null, "LC_Adult",
+                "Test", lastName, "test@example.com",
+                "2000-01-01", "MALE", "IRL", null, null, "SENIOR");
+    }
+
+    @Test
+    void import_backtickInLastName_normalisedToApostrophe() {
+        List<Member> members = new ArrayList<>();
+        memberService.importRegistrationData(members, List.of(entryWithLastName("O`Brien")));
+        assertEquals("O'Brien", members.get(0).getFamilyName());
+    }
+
+    @Test
+    void import_doubleQuoteInLastName_normalisedToApostrophe() {
+        List<Member> members = new ArrayList<>();
+        memberService.importRegistrationData(members, List.of(entryWithLastName("O\"Brien")));
+        assertEquals("O'Brien", members.get(0).getFamilyName());
+    }
+
+    @Test
+    void import_curlyApostropheInLastName_normalisedToApostrophe() {
+        List<Member> members = new ArrayList<>();
+        memberService.importRegistrationData(members, List.of(entryWithLastName("O\u2019Brien")));
+        assertEquals("O'Brien", members.get(0).getFamilyName());
+    }
+
+    @Test
+    void import_mcCasedLastName_storedAsTitleCase() {
+        // capitalizeName lowercases before re-capitalising, so "McCann" becomes "Mccann"
+        // in storage. The Mc prefix capital is only preserved in data that was never
+        // processed through capitalizeName (i.e. existing database records).
+        List<Member> members = new ArrayList<>();
+        memberService.importRegistrationData(members, List.of(entryWithLastName("McCann")));
+        assertEquals("Mccann", members.get(0).getFamilyName());
+    }
+
+    // ---- dobsMatch ----
+
+    @Test
+    void dobsMatch_exactMatch_true() {
+        assertTrue(MemberService.dobsMatch("1990-01-01", "1990-01-01"));
+    }
+
+    @Test
+    void dobsMatch_withinTolerance_true() {
+        assertTrue(MemberService.dobsMatch("1990-01-01", "1990-01-04"));
+    }
+
+    @Test
+    void dobsMatch_exactlyOnTolerance_true() {
+        assertTrue(MemberService.dobsMatch("1990-01-01", "1990-01-06")); // 5 days
+    }
+
+    @Test
+    void dobsMatch_beyondTolerance_false() {
+        assertFalse(MemberService.dobsMatch("1990-01-01", "1990-01-07")); // 6 days
+    }
+
+    @Test
+    void dobsMatch_nullOrEmpty_false() {
+        assertFalse(MemberService.dobsMatch(null, "1990-01-01"));
+        assertFalse(MemberService.dobsMatch("1990-01-01", ""));
+    }
+
+    @Test
+    void import_dobOffByFewDays_stillMatches() {
+        Member existing = memberWithMid("25U999", "Alice", "Smith", "1990-01-01", null);
+        List<Member> members = new ArrayList<>(List.of(existing));
+        var entries = List.of(entry("26U001", "MID-X", "Alice", "Smith", "1990-01-03", "2026-12-31"));
+
+        var result = memberService.importRegistrationData(members, entries);
+
+        assertEquals(1, result.updated().size());
+        assertEquals("name + DOB", result.updated().get(0).matchMethod());
+    }
+
     @Test
     void mapLicenseClass_adultCategories_returnAdult() {
         for (String cat : List.of("SENIOR", "JUNIOR", "M40", "M50", "WM40")) {
@@ -445,6 +555,36 @@ class MemberServiceTest {
         for (String cat : List.of("U8", "U10", "U12", "U14", "U16", "U18")) {
             assertEquals("Youth", MemberService.mapLicenseClass(cat), "Expected Youth for: " + cat);
         }
+    }
+
+    // ---- licenseClassFromDob ----
+
+    @Test
+    void licenseClassFromDob_exactly18ThisYear_returnsAdult() {
+        int year = java.time.LocalDate.now().getYear() - 18;
+        assertEquals("Adult", MemberService.licenseClassFromDob(year + "-06-15"));
+    }
+
+    @Test
+    void licenseClassFromDob_over18_returnsAdult() {
+        int year = java.time.LocalDate.now().getYear() - 30;
+        assertEquals("Adult", MemberService.licenseClassFromDob(year + "-01-01"));
+    }
+
+    @Test
+    void licenseClassFromDob_under18_returnsYouth() {
+        int year = java.time.LocalDate.now().getYear() - 10;
+        assertEquals("Youth", MemberService.licenseClassFromDob(year + "-06-15"));
+    }
+
+    @Test
+    void licenseClassFromDob_null_returnsNull() {
+        assertNull(MemberService.licenseClassFromDob(null));
+    }
+
+    @Test
+    void licenseClassFromDob_unparseable_returnsNull() {
+        assertNull(MemberService.licenseClassFromDob("not-a-date"));
     }
 
     @Test
@@ -461,6 +601,80 @@ class MemberServiceTest {
         memberService.importRegistrationData(members, entries);
 
         assertEquals("Murphy", members.get(0).getFamilyName());
+    }
+
+    // ---- formatFamilyNameForOutput ----
+
+    @Test
+    void formatFamilyName_simple_uppercased() {
+        assertEquals("SMITH", MemberService.formatFamilyNameForOutput("Smith"));
+    }
+
+    @Test
+    void formatFamilyName_apostrophe_replacedWithSpace() {
+        assertEquals("O FLAHERTY", MemberService.formatFamilyNameForOutput("O'Flaherty"));
+    }
+
+    @Test
+    void formatFamilyName_hyphen_replacedWithSpace() {
+        assertEquals("BERKELEY HUGHES", MemberService.formatFamilyNameForOutput("Berkeley-Hughes"));
+    }
+
+    @Test
+    void formatFamilyName_incorrectCase_corrected() {
+        assertEquals("BERKELEY HUGHES", MemberService.formatFamilyNameForOutput("Berkeley-HugheS"));
+    }
+
+    @Test
+    void formatFamilyName_mcPrefix_split() {
+        assertEquals("MC CANN", MemberService.formatFamilyNameForOutput("McCann"));
+    }
+
+    @Test
+    void formatFamilyName_mcPrefix_lowerAfterMc_notSplit() {
+        // "Mccann" has lowercase 'c' after Mc — not a detected prefix, no split
+        assertEquals("MCCANN", MemberService.formatFamilyNameForOutput("Mccann"));
+    }
+
+    @Test
+    void formatFamilyName_macPrefix_split() {
+        assertEquals("MAC DONALD", MemberService.formatFamilyNameForOutput("MacDonald"));
+    }
+
+    @Test
+    void formatFamilyName_macPrefix_allCaps_notSplit() {
+        // All-caps input has no detectable prefix — original case info is gone
+        assertEquals("MACDONALD", MemberService.formatFamilyNameForOutput("MACDONALD"));
+    }
+
+    @Test
+    void formatFamilyName_mackness_notSplit() {
+        assertEquals("MACKNESS", MemberService.formatFamilyNameForOutput("Mackness"));
+    }
+
+    @Test
+    void formatFamilyName_oApostrophe_removedAndSpaced() {
+        assertEquals("O BRIEN", MemberService.formatFamilyNameForOutput("O'Brien"));
+    }
+
+    @Test
+    void formatFamilyName_backtickSeparator_treatedAsSpace() {
+        assertEquals("O BRIEN", MemberService.formatFamilyNameForOutput("O`Brien"));
+    }
+
+    @Test
+    void formatFamilyName_doubleQuoteSeparator_treatedAsSpace() {
+        assertEquals("O BRIEN", MemberService.formatFamilyNameForOutput("O\"Brien"));
+    }
+
+    @Test
+    void formatFamilyName_curlyApostrophe_treatedAsSpace() {
+        assertEquals("O BRIEN", MemberService.formatFamilyNameForOutput("O\u2019Brien"));
+    }
+
+    @Test
+    void formatFamilyName_null_returnsNull() {
+        assertNull(MemberService.formatFamilyNameForOutput(null));
     }
 
     // ---- capitalizeName ----
@@ -496,14 +710,14 @@ class MemberServiceTest {
     }
 
     @Test
-    void import_doesNotOverwriteExistingMid() {
+    void import_doesNotTouchInternationalLicenseField() {
         Member existing = memberWithMid("25U001", "Alice", "Smith", "1990-01-01", "EXISTING-MID");
         List<Member> members = new ArrayList<>(List.of(existing));
         var entries = List.of(entry("26U001", "DIFFERENT-MID", "Alice", "Smith", "1990-01-01", "2026-12-31"));
 
         memberService.importRegistrationData(members, entries);
 
-        // MID matched — existing MID should not be overwritten
+        // International License field is never written by import
         assertEquals("EXISTING-MID", existing.getInternationalLicense());
     }
 }

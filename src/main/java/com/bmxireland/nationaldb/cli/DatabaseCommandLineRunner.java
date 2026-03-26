@@ -347,29 +347,9 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
     }
 
     private void listAvailableRaceNumbers(Scanner scanner) {
-        System.out.println("\n═══════════════ Available Race Numbers (101+) ═══════════════");
-        System.out.println("  Select plate category:");
-        System.out.println("    1. Plate 20");
-        System.out.println("    2. Plate 24");
-        System.out.println("    3. Plate Retro");
-        System.out.println("    4. Plate Open");
-        System.out.print("  Category (or Enter to cancel): ");
+        System.out.println("\n═══════════════ Available Race Numbers (Plate 20) ═══════════════");
 
-        String categoryChoice = scanner.nextLine().trim();
-        String fieldName = switch (categoryChoice) {
-            case "1" -> "Plate 20";
-            case "2" -> "Plate 24";
-            case "3" -> "Plate Retro";
-            case "4" -> "Plate Open";
-            default  -> null;
-        };
-
-        if (fieldName == null) {
-            System.out.println("Cancelled.");
-            return;
-        }
-
-        AvailableNumbersResult result = memberService.getAvailableRaceNumbers(members, fieldName);
+        AvailableNumbersResult result = memberService.getAvailableRaceNumbers(members, MemberService.BULK_UPDATE_FIELD);
 
         System.out.printf("%n  Category     : %s%n", result.fieldName());
         System.out.printf("  Stale cutoff : licenses expired before %s (3+ years ago)%n", result.staleCutoff());

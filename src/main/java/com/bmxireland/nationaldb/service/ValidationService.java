@@ -42,10 +42,12 @@ public class ValidationService {
         List<ValidationIssue> issues = new ArrayList<>();
 
         issues.addAll(validateNoDuplicateRaceNumbers(members));
+        issues.addAll(validateRaceNumberRange(members));
         issues.addAll(validateNoDuplicateTransponderNumbers(members));
         issues.addAll(validateNoPossibleDuplicateMembers(members));
         issues.addAll(validateLicenseExpiryMatchesLicenseYear(members));
         issues.addAll(validateTransponderFormats(members));
+        issues.addAll(validateDateFormats(members));
 
         if (issues.isEmpty()) {
             log.info("Validation passed: no issues found.");
@@ -69,6 +71,40 @@ public class ValidationService {
         issues.addAll(findDuplicates(members, "Plate Open", Member::getPlateOpen));
 
         return issues;
+    }
+
+    /**
+     * Validates that all numeric race (plate) numbers are three digits or fewer (1–999).
+     * Numbers >= 1000 are invalid for BMX racing.
+     */
+    public List<ValidationIssue> validateRaceNumberRange(List<Member> members) {
+        List<ValidationIssue> issues = new ArrayList<>();
+
+        checkRaceNumberRange(members, "Plate 20",    Member::getPlate20,    issues);
+        checkRaceNumberRange(members, "Plate 24",    Member::getPlate24,    issues);
+        checkRaceNumberRange(members, "Plate Retro", Member::getPlateRetro, issues);
+        checkRaceNumberRange(members, "Plate Open",  Member::getPlateOpen,  issues);
+
+        return issues;
+    }
+
+    private void checkRaceNumberRange(List<Member> members, String fieldName,
+                                      FieldExtractor extractor, List<ValidationIssue> issues) {
+        for (Member m : members) {
+            String value = extractor.extract(m);
+            if (isBlankOrNone(value)) continue;
+            try {
+                int num = Integer.parseInt(value.trim());
+                if (num >= 1000) {
+                    issues.add(new ValidationIssue(
+                            "INVALID RACE NUMBER",
+                            String.format("%s value '%s' must be less than 1000 (three digits max)", fieldName, value.trim()),
+                            List.of(m)));
+                }
+            } catch (NumberFormatException ignored) {
+                // non-numeric values are handled elsewhere
+            }
+        }
     }
 
     /**
@@ -111,10 +147,10 @@ public class ValidationService {
                     continue;
                 }
 
-                // DOB must be non-empty and match exactly
+                // DOB must be non-empty and within tolerance
                 String dobA = StringUtils.trimToEmpty(a.getBirthDate());
                 String dobB = StringUtils.trimToEmpty(b.getBirthDate());
-                if (dobA.isEmpty() || !dobA.equals(dobB)) {
+                if (!MemberService.dobsMatch(dobA, dobB)) {
                     continue;
                 }
 
@@ -165,6 +201,29 @@ public class ValidationService {
         }
 
         return issues;
+    }
+
+    private static final java.util.regex.Pattern DATE_FORMAT = java.util.regex.Pattern.compile("^\\d{4}-\\d{2}-\\d{2}$");
+    /**
+     * Validates that non-blank date fields (Birth Date, License Expiry) are in YYYY-MM-DD format.
+     */
+    public List<ValidationIssue> validateDateFormats(List<Member> members) {
+        List<ValidationIssue> issues = new ArrayList<>();
+        for (Member m : members) {
+            validateDateField(m, "Birth Date",      m.getBirthDate(),    issues);
+            validateDateField(m, "License Expiry",  m.getLicenseExpiry(), issues);
+        }
+        return issues;
+    }
+
+    private void validateDateField(Member m, String fieldName, String value, List<ValidationIssue> issues) {
+        if (isBlankOrNone(value)) return;
+        if (!DATE_FORMAT.matcher(value.trim()).matches()) {
+            issues.add(new ValidationIssue(
+                    "INVALID DATE FORMAT",
+                    String.format("%s value '%s' does not match required format YYYY-MM-DD", fieldName, value.trim()),
+                    List.of(m)));
+        }
     }
 
     private static final java.util.regex.Pattern TRANSPONDER_FORMAT = java.util.regex.Pattern.compile("^[A-Z]{2}-\\d{5}$");

@@ -4,6 +4,8 @@ import com.bmxireland.nationaldb.model.Member;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
@@ -153,5 +155,101 @@ class DatabaseServiceTest {
     void getFieldValue_roundtrip_matchesUpdate() {
         databaseService.updateMemberField(member, "Family Name", "O'Brien");
         assertEquals("O'Brien", databaseService.getFieldValue(member, "Family Name"));
+    }
+
+    // ---- normalizePhoneNumber ----
+
+    @Test
+    void phoneNumber_alreadyFormatted_unchanged() {
+        assertEquals("083 1234567", databaseService.normalizePhoneNumber("083 1234567"));
+    }
+
+    @Test
+    void phoneNumber_noSpaces_formatted() {
+        assertEquals("083 1234567", databaseService.normalizePhoneNumber("0831234567"));
+    }
+
+    @Test
+    void phoneNumber_internationalPlus353_stripped() {
+        assertEquals("083 1234567", databaseService.normalizePhoneNumber("+353831234567"));
+    }
+
+    @Test
+    void phoneNumber_international00353_stripped() {
+        assertEquals("083 1234567", databaseService.normalizePhoneNumber("00353831234567"));
+    }
+
+    @Test
+    void phoneNumber_spacesAndDashes_normalised() {
+        assertEquals("083 1234567", databaseService.normalizePhoneNumber("083-123-4567"));
+    }
+
+    @Test
+    void phoneNumber_internationalWithSpaces_normalised() {
+        assertEquals("087 9876543", databaseService.normalizePhoneNumber("+353 87 987 6543"));
+    }
+
+    @Test
+    void phoneNumber_null_returnsNull() {
+        assertNull(databaseService.normalizePhoneNumber(null));
+    }
+
+    @Test
+    void phoneNumber_blank_returnsBlank() {
+        assertEquals("   ", databaseService.normalizePhoneNumber("   "));
+    }
+
+    // ---- resolveClubName ----
+
+    private void setGroups(String... names) {
+        databaseService.validGroupNames = new java.util.ArrayList<>(List.of(names));
+    }
+
+    @Test
+    void resolveClubName_exactMatch_returned() {
+        setGroups("Lucan BMX", "Dublin BMX");
+        assertEquals("Lucan BMX", databaseService.resolveClubName("Lucan BMX"));
+    }
+
+    @Test
+    void resolveClubName_caseInsensitiveExact_returned() {
+        setGroups("Lucan BMX");
+        assertEquals("Lucan BMX", databaseService.resolveClubName("lucan bmx"));
+    }
+
+    @Test
+    void resolveClubName_containment_matchesLongerInput() {
+        setGroups("Lucan BMX", "Dublin BMX");
+        assertEquals("Lucan BMX", databaseService.resolveClubName("Lucan BMX Club"));
+    }
+
+    @Test
+    void resolveClubName_containment_matchesShorterInput() {
+        setGroups("Lucan BMX Club");
+        assertEquals("Lucan BMX Club", databaseService.resolveClubName("Lucan BMX"));
+    }
+
+    @Test
+    void resolveClubName_editDistance_closeMatch() {
+        setGroups("Wexford BMX");
+        assertEquals("Wexford BMX", databaseService.resolveClubName("Wexfrd BMX"));
+    }
+
+    @Test
+    void resolveClubName_noMatch_returnsOther() {
+        setGroups("Lucan BMX", "Dublin BMX");
+        assertEquals("Other", databaseService.resolveClubName("Completely Unknown Club XYZZY"));
+    }
+
+    @Test
+    void resolveClubName_noGroupsLoaded_returnsOriginal() {
+        // validGroupNames empty — no workbook loaded
+        assertEquals("Lucan BMX Club", databaseService.resolveClubName("Lucan BMX Club"));
+    }
+
+    @Test
+    void resolveClubName_null_returnsNull() {
+        setGroups("Lucan BMX");
+        assertNull(databaseService.resolveClubName(null));
     }
 }

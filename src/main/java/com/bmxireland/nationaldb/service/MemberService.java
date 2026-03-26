@@ -18,8 +18,9 @@ import java.util.stream.Collectors;
 @Service
 public class MemberService {
 
-    static final String BULK_UPDATE_FIELD = "Plate 20";
+    public static final String BULK_UPDATE_FIELD = "Plate 20";
     static final int STALE_LICENSE_YEARS = 3;
+    static final int DOB_TOLERANCE_DAYS = 5;
 
     private final DatabaseService databaseService;
 
@@ -80,8 +81,11 @@ public class MemberService {
     }
 
     /**
-     * Processes "Name, PlateNumber" input lines and updates the Plate 20 field for
+     * Processes bulk plate-number input lines and updates the Plate 20 field for
      * members that are uniquely identified by the given name.
+     * Accepted formats:
+     *   "Name #123"   — hash separator
+     *   "Name = 123"  — equals separator (copy-paste from spreadsheet/text)
      * Entries that cannot be uniquely matched are recorded as skipped with a reason.
      */
     public BulkUpdateResult bulkUpdatePlate20(List<Member> members, List<String> inputLines) {
@@ -91,22 +95,27 @@ public class MemberService {
         for (String line : inputLines) {
             if (line == null || line.isBlank()) continue;
 
-            int hashIdx = line.indexOf('#');
-            if (hashIdx == -1) {
+            // Detect separator: '=' takes priority; fall back to '#'
+            int sepIdx = line.indexOf('=');
+            if (sepIdx == -1) {
+                sepIdx = line.indexOf('#');
+            }
+            if (sepIdx == -1) {
                 skipped.add(new BulkUpdateResult.SkippedEntry(
-                        line, "Invalid format: expected 'Name #123'", List.of()));
+                        line, "Invalid format: expected 'Name = 123' or 'Name #123'", List.of()));
                 continue;
             }
 
-            String name = line.substring(0, hashIdx).trim();
+            // Normalise internal whitespace in the name (e.g. double spaces)
+            String name = StringUtils.normalizeSpace(line.substring(0, sepIdx).trim());
 
-            // Extract leading digits after '#'; anything following (spaces, notes) is ignored
-            String afterHash = line.substring(hashIdx + 1).trim();
+            // Extract leading digits after the separator; anything following is ignored
+            String afterSep = line.substring(sepIdx + 1).trim();
             int digitEnd = 0;
-            while (digitEnd < afterHash.length() && Character.isDigit(afterHash.charAt(digitEnd))) {
+            while (digitEnd < afterSep.length() && Character.isDigit(afterSep.charAt(digitEnd))) {
                 digitEnd++;
             }
-            String plateNumber = afterHash.substring(0, digitEnd);
+            String plateNumber = afterSep.substring(0, digitEnd);
 
             if (name.isEmpty()) {
                 skipped.add(new BulkUpdateResult.SkippedEntry(
@@ -167,7 +176,7 @@ public class MemberService {
         }
 
         int maxAssigned = assignedAbove100.isEmpty() ? 100 : assignedAbove100.lastKey();
-        int maxRange    = Math.max(maxAssigned + 20, 120);
+        int maxRange    = Math.min(Math.max(maxAssigned + 20, 120), 999);
         List<Integer> unassigned = new ArrayList<>();
         for (int n = 101; n <= maxRange; n++) {
             if (!assignedAbove100.containsKey(n)) {
@@ -230,7 +239,7 @@ public class MemberService {
                 String fullName = trim(entry.firstName()) + " " + trim(entry.lastName());
                 List<Member> nameMatches = search(members, fullName.trim());
                 List<Member> dobMatches = nameMatches.stream()
-                        .filter(m -> trim(entry.dateOfBirth()).equalsIgnoreCase(trim(m.getBirthDate())))
+                        .filter(m -> dobsMatch(trim(entry.dateOfBirth()), trim(m.getBirthDate())))
                         .collect(Collectors.toList());
                 if (dobMatches.size() == 1) {
                     match = dobMatches.get(0);
@@ -248,11 +257,6 @@ public class MemberService {
                 match.setLicenseNumber(entry.licenseNumber());
                 match.setLicenseExpiry(entry.expiryDate());
                 match.setActive("Yes");
-                // Backfill MID if missing — fixes root cause of duplicate row problem
-                if ((match.getInternationalLicense() == null || match.getInternationalLicense().isBlank())
-                        && entry.memberId() != null && !entry.memberId().isBlank()) {
-                    match.setInternationalLicense(entry.memberId());
-                }
                 updated.add(new ImportResult.UpdatedEntry(match, oldLicense, entry.licenseNumber(), matchMethod));
 
                 // Keep lookup maps current so later entries in the same file don't re-match
@@ -308,20 +312,42 @@ public class MemberService {
         m.setLicenseNumber(entry.licenseNumber());
         String riderCat = (entry.riderCategory() != null && !entry.riderCategory().isBlank())
                 ? entry.riderCategory() : entry.category();
-        m.setLicenseClass(mapLicenseClass(riderCat));
+        String licenseClass = mapLicenseClass(riderCat);
+        if (licenseClass == null) {
+            licenseClass = licenseClassFromDob(entry.dateOfBirth());
+        }
+        m.setLicenseClass(licenseClass);
         m.setLicenseExpiry(entry.expiryDate());
         m.setGivenName(entry.firstName());
-        m.setFamilyName(capitalizeName(entry.lastName()));
+        m.setFamilyName(capitalizeName(normalizeSeparators(entry.lastName())));
         m.setBirthDate(entry.dateOfBirth());
         m.setGender(normalizeGender(entry.gender()));
         m.setActive("Yes");
-        m.setInternationalLicense(entry.memberId());
         m.setClubName(entry.club());
         m.setEmail(entry.email());
         m.setLicenseCountryCode(entry.nationality());
         m.setEmergencyContactPerson(entry.emergencyContactName());
         m.setEmergencyContactNumber(entry.emergencyContactPhone());
         return m;
+    }
+
+    /**
+     * Formats a family name for database output:
+     * - Apostrophes and hyphens are replaced with spaces ("O'Brien" → "O BRIEN")
+     * - Mc/Mac surname prefixes are separated from the rest ("McCann" → "MC CANN")
+     * - Everything is uppercased
+     */
+    static String formatFamilyNameForOutput(String name) {
+        if (name == null || name.isBlank()) return name;
+        // Detect genuine Mc/Mac prefixes BEFORE uppercasing: a capital letter after the
+        // prefix in the original name signals a real Gaelic prefix ("McCann" yes,
+        // "Mackness" no). Insert a space so they separate correctly after uppercasing.
+        String s = name.replaceAll("\\bMac([A-Z])", "Mac $1")
+                       .replaceAll("\\bMc([A-Z])",  "Mc $1");
+        // Replace all separator variants (apostrophe, backtick, quotes, curly quotes,
+        // hyphens) with spaces, then uppercase and normalise whitespace
+        return s.replaceAll("[''`\"\\u201C\\u201D\\u2018\\u2019\\-]", " ")
+                .toUpperCase().replaceAll("\\s+", " ").trim();
     }
 
     /**
@@ -361,6 +387,21 @@ public class MemberService {
      * Maps a Cycling Ireland rider category to "Adult" or "Youth".
      * JUNIOR, SENIOR, M40, M50, WM40 → Adult; U* categories → Youth.
      */
+    /**
+     * Derives "Adult" or "Youth" from date of birth.
+     * A rider is Adult if their age in the current calendar year is 18 or over.
+     * Returns null if the DOB is missing or cannot be parsed.
+     */
+    static String licenseClassFromDob(String dob) {
+        if (dob == null || dob.isBlank()) return null;
+        try {
+            int birthYear = LocalDate.parse(dob.trim()).getYear();
+            return (LocalDate.now().getYear() - birthYear) >= 18 ? "Adult" : "Youth";
+        } catch (DateTimeParseException ignored) {
+            return null;
+        }
+    }
+
     static String mapLicenseClass(String riderCategory) {
         if (riderCategory == null || riderCategory.isBlank()) return null;
         return switch (riderCategory.trim().toUpperCase()) {
@@ -376,6 +417,27 @@ public class MemberService {
             case "F", "FEMALE" -> "F";
             default            -> gender.trim();
         };
+    }
+
+    /**
+     * Normalises non-standard separator characters in a name to a standard apostrophe,
+     * so that backtick, double-quote, and curly-quote variants are handled uniformly.
+     */
+    private static String normalizeSeparators(String name) {
+        if (name == null) return null;
+        return name.replaceAll("[`\"\u201C\u201D\u2018\u2019]", "'");
+    }
+
+    static boolean dobsMatch(String dob1, String dob2) {
+        if (dob1 == null || dob1.isEmpty() || dob2 == null || dob2.isEmpty()) return false;
+        if (dob1.equalsIgnoreCase(dob2)) return true;
+        try {
+            long diff = Math.abs(java.time.temporal.ChronoUnit.DAYS.between(
+                    LocalDate.parse(dob1), LocalDate.parse(dob2)));
+            return diff <= DOB_TOLERANCE_DAYS;
+        } catch (DateTimeParseException ignored) {
+            return false;
+        }
     }
 
     private String trim(String value) {

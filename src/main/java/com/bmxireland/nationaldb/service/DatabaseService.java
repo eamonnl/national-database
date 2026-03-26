@@ -1,21 +1,38 @@
 package com.bmxireland.nationaldb.service;
 
-import com.bmxireland.nationaldb.model.Member;
-import com.bmxireland.nationaldb.model.RegistrationEntry;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+
 import org.apache.commons.lang3.StringUtils;
-import org.apache.poi.ss.usermodel.*;
+import org.apache.commons.text.similarity.LevenshteinDistance;
+import org.apache.poi.ss.usermodel.Cell;
+import org.apache.poi.ss.usermodel.CellType;
+import org.apache.poi.ss.usermodel.DateUtil;
+import org.apache.poi.ss.usermodel.FillPatternType;
+import org.apache.poi.ss.usermodel.Row;
+import org.apache.poi.ss.usermodel.Sheet;
+import org.apache.poi.ss.usermodel.Workbook;
+import org.apache.poi.xssf.usermodel.XSSFCellStyle;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
-import java.io.*;
-import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
+import com.bmxireland.nationaldb.model.Member;
+import com.bmxireland.nationaldb.model.RegistrationEntry;
+import com.google.i18n.phonenumbers.NumberParseException;
+import com.google.i18n.phonenumbers.PhoneNumberUtil;
+import com.google.i18n.phonenumbers.Phonenumber;
 
 /**
  * Service responsible for reading and writing the member database xlsx file.
@@ -31,9 +48,13 @@ public class DatabaseService {
     @Value("${database.file.path:MemberDatabase.xlsx}")
     private String databaseFilePath;
 
-    private List<Row> headerRows; // preserved raw header rows (before second delimiter)
-    private Row columnHeaderRow;  // the column names row (immediately after second delimiter)
+    private static final String FALLBACK_CLUB = "Other";
+    private static final LevenshteinDistance LEVENSHTEIN = LevenshteinDistance.getDefaultInstance();
+
     private Workbook workbook;
+    private int membersSheetIndex;
+    private int dataStartRowIndex;
+    List<String> validGroupNames = new ArrayList<>();
 
     /**
      * Loads members from the xlsx file, validating the header structure.
@@ -53,13 +74,13 @@ public class DatabaseService {
             workbook = new XSSFWorkbook(fis);
         }
 
-        Sheet sheet = workbook.getSheetAt(0);
+        membersSheetIndex = 0;
+        Sheet sheet = workbook.getSheetAt(membersSheetIndex);
         List<Member> members = new ArrayList<>();
 
         // Parse header: find the two '****************' delimiter rows
         int firstDelimiterRow = -1;
         int secondDelimiterRow = -1;
-        headerRows = new ArrayList<>();
 
         for (int i = 0; i <= sheet.getLastRowNum(); i++) {
             Row row = sheet.getRow(i);
@@ -84,23 +105,17 @@ public class DatabaseService {
 
         log.info("Header delimiters found at rows {} and {}", firstDelimiterRow + 1, secondDelimiterRow + 1);
 
-        // Store header rows (inclusive of both delimiters)
-        for (int i = firstDelimiterRow; i <= secondDelimiterRow; i++) {
-            headerRows.add(sheet.getRow(i));
-        }
-
         // The column header row is immediately after the second delimiter
         int columnHeaderIndex = secondDelimiterRow + 1;
-        columnHeaderRow = sheet.getRow(columnHeaderIndex);
-        if (columnHeaderRow == null) {
+        if (sheet.getRow(columnHeaderIndex) == null) {
             throw new IOException("No column header row found after the header section.");
         }
 
-        log.info("Column headers at row {}: {}", columnHeaderIndex + 1,
-                getCellStringValue(columnHeaderRow.getCell(0)));
+        log.info("Column headers at row {}", columnHeaderIndex + 1);
 
-        // Parse data rows (starting after column header row)
-        int dataStartRow = columnHeaderIndex + 1;
+        // Data rows start after the column header row
+        dataStartRowIndex = columnHeaderIndex + 1;
+        int dataStartRow = dataStartRowIndex;
         int memberIndex = 0;
         for (int i = dataStartRow; i <= sheet.getLastRowNum(); i++) {
             Row row = sheet.getRow(i);
@@ -116,6 +131,7 @@ public class DatabaseService {
         }
 
         log.info("Loaded {} members from database", members.size());
+        loadGroupNames();
         return members;
     }
 
@@ -131,37 +147,50 @@ public class DatabaseService {
         String outputPath = databaseFilePath.replace(".xlsx", "_" + timestamp + ".xlsx");
         File outputFile = new File(outputPath);
 
-        Workbook newWorkbook = new XSSFWorkbook();
-        Sheet newSheet = newWorkbook.createSheet("Members");
+        // Work directly on the loaded workbook so all sheets, styles, and
+        // formatting from the original file are preserved automatically.
+        Sheet sheet = workbook.getSheetAt(membersSheetIndex);
 
-        // Write header rows (preserved from original file)
-        int currentRow = 0;
-        for (Row headerRow : headerRows) {
-            Row newRow = newSheet.createRow(currentRow);
-            copyRow(headerRow, newRow);
-            currentRow++;
+        // Remove existing data rows from the bottom up to avoid index shifting
+        for (int i = sheet.getLastRowNum(); i >= dataStartRowIndex; i--) {
+            Row row = sheet.getRow(i);
+            if (row != null)
+                sheet.removeRow(row);
         }
 
-        // Write column header row
-        Row newColumnHeader = newSheet.createRow(currentRow);
-        copyRow(columnHeaderRow, newColumnHeader);
-        currentRow++;
+        // Build a single cell style for stale-licence rows (light amber #FFE099)
+        XSSFCellStyle staleStyle = (XSSFCellStyle) workbook.createCellStyle();
+        staleStyle.setFillForegroundColor(new org.apache.poi.xssf.usermodel.XSSFColor(
+                new byte[] { (byte) 0xFF, (byte) 0xE0, (byte) 0x99 }, null));
+        staleStyle.setFillPattern(FillPatternType.SOLID_FOREGROUND);
+
+        LocalDate staleCutoff = LocalDate.now().minusYears(MemberService.STALE_LICENSE_YEARS);
 
         // Write member data rows sorted by family name
         List<Member> sorted = members.stream()
                 .sorted(Comparator.comparing(
                         m -> StringUtils.defaultString(m.getFamilyName()).toLowerCase()))
                 .toList();
+        int rowIdx = dataStartRowIndex;
         for (Member member : sorted) {
-            Row newRow = newSheet.createRow(currentRow);
-            writeMemberToRow(member, newRow);
-            currentRow++;
+            if (isLicenseStale(member, staleCutoff)) {
+                member.setActive("No");
+            }
+            Row row = sheet.createRow(rowIdx++);
+            writeMemberToRow(member, row);
+            if (isLicenseStale(member, staleCutoff)) {
+                for (int c = 0; c < EXPECTED_COLUMNS; c++) {
+                    Cell cell = row.getCell(c);
+                    if (cell == null)
+                        cell = row.createCell(c);
+                    cell.setCellStyle(staleStyle);
+                }
+            }
         }
 
         try (FileOutputStream fos = new FileOutputStream(outputFile)) {
-            newWorkbook.write(fos);
+            workbook.write(fos);
         }
-        newWorkbook.close();
 
         log.info("Database saved with {} members to: {}", members.size(), outputFile.getAbsolutePath());
         return outputFile.getAbsolutePath();
@@ -186,29 +215,30 @@ public class DatabaseService {
 
         List<RegistrationEntry> entries = new ArrayList<>();
         try (FileInputStream fis = new FileInputStream(file);
-             Workbook wb = new XSSFWorkbook(fis)) {
+                Workbook wb = new XSSFWorkbook(fis)) {
 
             Sheet sheet = wb.getSheetAt(0);
-            for (int i = 1; i <= sheet.getLastRowNum(); i++) {   // row 0 is the header
+            for (int i = 1; i <= sheet.getLastRowNum(); i++) { // row 0 is the header
                 Row row = sheet.getRow(i);
-                if (row == null || isRowEmpty(row)) continue;
+                if (row == null || isRowEmpty(row))
+                    continue;
 
                 entries.add(new RegistrationEntry(
-                        getCellStringValue(row.getCell(0)),   // Club
-                        getCellStringValue(row.getCell(1)),   // Registration Date
-                        getCellStringValue(row.getCell(2)),   // Expiry Date
-                        getCellStringValue(row.getCell(4)),   // Licence Number
-                        getCellStringValue(row.getCell(5)),   // MID (stable member ID)
-                        getCellStringValue(row.getCell(7)),   // Category
-                        getCellStringValue(row.getCell(10)),  // First Name
-                        getCellStringValue(row.getCell(11)),  // Last Name
-                        getCellStringValue(row.getCell(12)),  // Email
-                        getCellStringValue(row.getCell(13)),  // DOB
-                        getCellStringValue(row.getCell(14)),  // Gender
-                        getCellStringValue(row.getCell(21)),  // Nationality
-                        getCellStringValue(row.getCell(24)),  // Emergency Contact Name
-                        getCellStringValue(row.getCell(26)),  // Emergency Contact Phone
-                        getCellStringValue(row.getCell(8))    // Rider Category (e.g. U8, SENIOR)
+                        getCellStringValue(row.getCell(0)), // Club
+                        getCellStringValue(row.getCell(1)), // Registration Date
+                        getCellStringValue(row.getCell(2)), // Expiry Date
+                        getCellStringValue(row.getCell(4)), // Licence Number
+                        getCellStringValue(row.getCell(5)), // MID (stable member ID)
+                        getCellStringValue(row.getCell(7)), // Category
+                        getCellStringValue(row.getCell(10)), // First Name
+                        getCellStringValue(row.getCell(11)), // Last Name
+                        getCellStringValue(row.getCell(12)), // Email
+                        getCellStringValue(row.getCell(13)), // DOB
+                        getCellStringValue(row.getCell(14)), // Gender
+                        getCellStringValue(row.getCell(21)), // Nationality
+                        getCellStringValue(row.getCell(24)), // Emergency Contact Name
+                        getCellStringValue(row.getCell(26)), // Emergency Contact Phone
+                        getCellStringValue(row.getCell(8)) // Rider Category (e.g. U8, SENIOR)
                 ));
             }
         }
@@ -275,8 +305,7 @@ public class DatabaseService {
                 "Club Name",
                 "Team Name 1", "Team Name 2", "Team Name 3", "Team Name 4", "Team Name 5",
                 "Email", "CC Email",
-                "Emergency Contact Person", "Emergency Contact Number"
-        );
+                "Emergency Contact Person", "Emergency Contact Number");
     }
 
     /**
@@ -357,7 +386,7 @@ public class DatabaseService {
         setCellValue(row, 1, m.getLicenseClass());
         setCellValue(row, 2, m.getLicenseExpiry());
         setCellValue(row, 3, m.getGivenName());
-        setCellValue(row, 4, m.getFamilyName());
+        setCellValue(row, 4, MemberService.formatFamilyNameForOutput(m.getFamilyName()));
         setCellValue(row, 5, m.getBirthDate());
         setCellValue(row, 6, normalizeGenderCode(m.getGender()));
         setCellValue(row, 7, m.getActive());
@@ -371,7 +400,7 @@ public class DatabaseService {
         setCellValue(row, 15, m.getTransponderOpen());
         setCellValue(row, 16, m.getLicenseCountryCode());
         setCellValue(row, 17, m.getInternationalLicense());
-        setCellValue(row, 18, m.getClubName());
+        setCellValue(row, 18, resolveClubName(m.getClubName()));
         setCellValue(row, 19, m.getTeamName1());
         setCellValue(row, 20, m.getTeamName2());
         setCellValue(row, 21, m.getTeamName3());
@@ -380,38 +409,17 @@ public class DatabaseService {
         setCellValue(row, 24, m.getEmail());
         setCellValue(row, 25, m.getCcEmail());
         setCellValue(row, 26, m.getEmergencyContactPerson());
-        setCellValue(row, 27, m.getEmergencyContactNumber());
-    }
-
-    private void copyRow(Row source, Row target) {
-        if (source == null) return;
-        for (int i = 0; i < EXPECTED_COLUMNS; i++) {
-            Cell sourceCell = source.getCell(i);
-            Cell targetCell = target.createCell(i);
-            if (sourceCell != null) {
-                switch (sourceCell.getCellType()) {
-                    case STRING -> targetCell.setCellValue(sourceCell.getStringCellValue());
-                    case NUMERIC -> {
-                        if (DateUtil.isCellDateFormatted(sourceCell)) {
-                            targetCell.setCellValue(sourceCell.getDateCellValue());
-                        } else {
-                            targetCell.setCellValue(sourceCell.getNumericCellValue());
-                        }
-                    }
-                    case BOOLEAN -> targetCell.setCellValue(sourceCell.getBooleanCellValue());
-                    case FORMULA -> targetCell.setCellFormula(sourceCell.getCellFormula());
-                    default -> targetCell.setCellValue("");
-                }
-            }
-        }
+        setCellValue(row, 27, normalizePhoneNumber(m.getEmergencyContactNumber()));
     }
 
     private String getCellStringValue(Cell cell) {
-        if (cell == null) return null;
+        if (cell == null)
+            return null;
         return switch (cell.getCellType()) {
             case STRING -> {
                 String val = cell.getStringCellValue();
-                if (val == null || val.isBlank() || val.trim().equalsIgnoreCase("None")) yield null;
+                if (val == null || val.isBlank() || val.trim().equalsIgnoreCase("None"))
+                    yield null;
                 yield val.trim();
             }
             case NUMERIC -> {
@@ -435,12 +443,138 @@ public class DatabaseService {
         cell.setCellValue(value != null ? value : "");
     }
 
+    private boolean isLicenseStale(Member member, LocalDate cutoff) {
+        String expiry = member.getLicenseExpiry();
+        if (expiry == null || expiry.isBlank())
+            return false;
+        try {
+            return LocalDate.parse(expiry.trim()).isBefore(cutoff);
+        } catch (java.time.format.DateTimeParseException ignored) {
+            return false;
+        }
+    }
+
+    private void loadGroupNames() {
+        validGroupNames.clear();
+        Sheet groupsSheet = workbook.getSheet("Groups");
+        if (groupsSheet == null) {
+            log.warn("No 'Groups' sheet found — club name normalisation will be skipped");
+            return;
+        }
+
+        // Scan every row to find the one containing "Group Name" as a column header
+        int groupNameCol = -1;
+        int headerRowIndex = -1;
+        for (int r = 0; r <= groupsSheet.getLastRowNum(); r++) {
+            Row row = groupsSheet.getRow(r);
+            if (row == null)
+                continue;
+            for (int c = 0; c < row.getLastCellNum(); c++) {
+                if ("Group Name".equalsIgnoreCase(getCellStringValue(row.getCell(c)))) {
+                    groupNameCol = c;
+                    headerRowIndex = r;
+                    break;
+                }
+            }
+            if (groupNameCol != -1)
+                break;
+        }
+
+        if (groupNameCol == -1) {
+            log.warn("No 'Group Name' column found in Groups sheet — club name normalisation will be skipped");
+            return;
+        }
+
+        log.info("Groups sheet: 'Group Name' column at index {} (row {})", groupNameCol, headerRowIndex + 1);
+
+        for (int i = headerRowIndex + 1; i <= groupsSheet.getLastRowNum(); i++) {
+            Row row = groupsSheet.getRow(i);
+            if (row == null)
+                continue;
+            String name = getCellStringValue(row.getCell(groupNameCol));
+            if (name != null && !name.isBlank()) {
+                validGroupNames.add(name.trim());
+            }
+        }
+        log.info("Loaded {} valid group names from Groups sheet", validGroupNames.size());
+    }
+
+    /**
+     * Fuzzy-matches a club name against the valid group names loaded from the
+     * Groups sheet.
+     * Priority: (1) exact case-insensitive match, (2) one name contains the other,
+     * (3) lowest Levenshtein distance within threshold. Falls back to "Other".
+     */
+    String resolveClubName(String clubName) {
+        if (validGroupNames.isEmpty() || clubName == null || clubName.isBlank())
+            return clubName;
+        String input = clubName.trim();
+        String inputLower = input.toLowerCase();
+
+        // 1. Exact match
+        for (String group : validGroupNames) {
+            if (group.equalsIgnoreCase(input))
+                return group;
+        }
+
+        // 2 & 3. Score every candidate; prefer contains, then smallest edit distance
+        String best = null;
+        int bestScore = Integer.MAX_VALUE; // lower is better
+
+        for (String group : validGroupNames) {
+            String groupLower = group.toLowerCase();
+            int score;
+            if (inputLower.contains(groupLower) || groupLower.contains(inputLower)) {
+                // Containment: score is length difference (shorter diff = better match)
+                score = Math.abs(input.length() - group.length());
+            } else {
+                int dist = LEVENSHTEIN.apply(inputLower, groupLower);
+                int threshold = Math.max(4, Math.max(inputLower.length(), groupLower.length()) / 4);
+                if (dist > threshold)
+                    continue;
+                // Offset containment scores so they always beat pure edit-distance scores
+                score = dist + 1000;
+            }
+            if (score < bestScore) {
+                bestScore = score;
+                best = group;
+            }
+        }
+
+        return best != null ? best : FALLBACK_CLUB;
+    }
+
+    private static final PhoneNumberUtil PHONE_UTIL = PhoneNumberUtil.getInstance();
+
+    /**
+     * Parses a phone number using Irish locale and formats it as "DDD DDDDDDD".
+     * International prefixes (+353, 00353) are stripped and the leading 0 restored.
+     * Returns the original value if the number cannot be parsed or is not 10
+     * digits.
+     */
+    String normalizePhoneNumber(String phone) {
+        if (phone == null || phone.isBlank())
+            return phone;
+        try {
+            Phonenumber.PhoneNumber parsed = PHONE_UTIL.parse(phone.trim(), "IE");
+            // getNationalSignificantNumber returns digits without the leading 0, e.g.
+            // "831234567"
+            String national = "0" + PHONE_UTIL.getNationalSignificantNumber(parsed);
+            if (national.length() == 10) {
+                return national.substring(0, 3) + " " + national.substring(3);
+            }
+        } catch (NumberParseException ignored) {
+        }
+        return phone.trim();
+    }
+
     private String normalizeGenderCode(String gender) {
-        if (gender == null) return null;
+        if (gender == null)
+            return null;
         return switch (gender.trim().toUpperCase()) {
-            case "M", "MALE"   -> "M";
+            case "M", "MALE" -> "M";
             case "F", "FEMALE" -> "F";
-            default            -> gender.trim();
+            default -> gender.trim();
         };
     }
 

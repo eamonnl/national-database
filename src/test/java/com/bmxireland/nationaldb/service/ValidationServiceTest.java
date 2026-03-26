@@ -40,6 +40,35 @@ class ValidationServiceTest {
         return m;
     }
 
+    // ---- validateRaceNumberRange ----
+
+    @Test
+    void raceNumber_below1000_noIssue() {
+        Member m = member("LIC001", "Alice", "Smith", "1990-01-01", null, "999", null);
+        assertTrue(validationService.validateRaceNumberRange(List.of(m)).isEmpty());
+    }
+
+    @Test
+    void raceNumber_exactly1000_flagged() {
+        Member m = member("LIC001", "Alice", "Smith", "1990-01-01", null, "1000", null);
+        var issues = validationService.validateRaceNumberRange(List.of(m));
+        assertEquals(1, issues.size());
+        assertEquals("INVALID RACE NUMBER", issues.get(0).category());
+    }
+
+    @Test
+    void raceNumber_above1000_flagged() {
+        Member m = member("LIC001", "Alice", "Smith", "1990-01-01", null, "9999", null);
+        var issues = validationService.validateRaceNumberRange(List.of(m));
+        assertEquals(1, issues.size());
+    }
+
+    @Test
+    void raceNumber_blank_ignored() {
+        Member m = member("LIC001", "Alice", "Smith", "1990-01-01", null, null, null);
+        assertTrue(validationService.validateRaceNumberRange(List.of(m)).isEmpty());
+    }
+
     // ---- validateNoDuplicateRaceNumbers ----
 
     @Test
@@ -144,6 +173,26 @@ class ValidationServiceTest {
     }
 
     @Test
+    void sameNameDobOffByFewDays_isFlagged() {
+        Member a = member("LIC2023", "John", "Murphy", "2000-05-01", null, null, null);
+        Member b = member("LIC2024", "John", "Murphy", "2000-05-04", null, null, null);
+
+        var issues = validationService.validateNoPossibleDuplicateMembers(List.of(a, b));
+
+        assertEquals(1, issues.size());
+    }
+
+    @Test
+    void sameNameDobOffBeyondTolerance_isNotFlagged() {
+        Member a = member("LIC2023", "John", "Murphy", "2000-05-01", null, null, null);
+        Member b = member("LIC2024", "John", "Murphy", "2000-05-08", null, null, null); // 7 days
+
+        var issues = validationService.validateNoPossibleDuplicateMembers(List.of(a, b));
+
+        assertTrue(issues.isEmpty());
+    }
+
+    @Test
     void sameNameButDifferentDob_isNotFlagged() {
         Member a = member("LIC2023", "John", "Murphy", "2000-05-01", null, null, null);
         Member b = member("LIC2024", "John", "Murphy", "1995-08-20", null, null, null);
@@ -171,6 +220,43 @@ class ValidationServiceTest {
         var issues = validationService.validateNoPossibleDuplicateMembers(List.of(a, b));
 
         assertEquals(1, issues.size());
+    }
+
+    // ---- validateDateFormats ----
+
+    @Test
+    void dateFormat_validDates_noIssue() {
+        Member m = member("25U001", "Alice", "Smith", "1990-01-01", null, null, "2025-12-31");
+        assertTrue(validationService.validateDateFormats(List.of(m)).isEmpty());
+    }
+
+    @Test
+    void dateFormat_invalidBirthDate_flagged() {
+        Member m = member("25U001", "Alice", "Smith", "01/01/1990", null, null, "2025-12-31");
+        var issues = validationService.validateDateFormats(List.of(m));
+        assertEquals(1, issues.size());
+        assertEquals("INVALID DATE FORMAT", issues.get(0).category());
+        assertTrue(issues.get(0).description().contains("Birth Date"));
+    }
+
+    @Test
+    void dateFormat_invalidExpiry_flagged() {
+        Member m = member("25U001", "Alice", "Smith", "1990-01-01", null, null, "31-12-2025");
+        var issues = validationService.validateDateFormats(List.of(m));
+        assertEquals(1, issues.size());
+        assertTrue(issues.get(0).description().contains("License Expiry"));
+    }
+
+    @Test
+    void dateFormat_blankDates_ignored() {
+        Member m = member("25U001", "Alice", "Smith", null, null, null, null);
+        assertTrue(validationService.validateDateFormats(List.of(m)).isEmpty());
+    }
+
+    @Test
+    void dateFormat_bothFieldsInvalid_twoIssues() {
+        Member m = member("25U001", "Alice", "Smith", "01/01/1990", null, null, "31/12/2025");
+        assertEquals(2, validationService.validateDateFormats(List.of(m)).size());
     }
 
     // ---- validateTransponderFormats ----

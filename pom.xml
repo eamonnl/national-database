@@ -54,6 +54,13 @@
             <version>${poi.version}</version>
         </dependency>
 
+        <!-- Google libphonenumber for parsing and normalising phone numbers -->
+        <dependency>
+            <groupId>com.googlecode.libphonenumber</groupId>
+            <artifactId>libphonenumber</artifactId>
+            <version>8.13.50</version>
+        </dependency>
+
         <!-- Spring Boot Test -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
