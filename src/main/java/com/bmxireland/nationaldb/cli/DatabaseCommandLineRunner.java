@@ -1,9 +1,9 @@
 package com.bmxireland.nationaldb.cli;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Scanner;
-import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,13 +12,17 @@ import org.springframework.stereotype.Component;
 
 import com.bmxireland.nationaldb.model.Member;
 import com.bmxireland.nationaldb.service.DatabaseService;
+import com.bmxireland.nationaldb.service.MemberService;
+import com.bmxireland.nationaldb.service.MemberService.AvailableNumbersResult;
+import com.bmxireland.nationaldb.service.MemberService.BulkUpdateResult;
 import com.bmxireland.nationaldb.service.ValidationService;
 import com.bmxireland.nationaldb.service.ValidationService.ValidationIssue;
 
 /**
  * Command-line interface for the BMX Ireland National Database application.
  * Loads the database on startup, runs validations, and presents an interactive
- * menu.
+ * menu. All business logic is delegated to the service layer so it can be
+ * reused by other presentation layers (e.g. a future web UI).
  */
 @Component
 public class DatabaseCommandLineRunner implements CommandLineRunner {
@@ -27,13 +31,17 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
 
     private final DatabaseService databaseService;
     private final ValidationService validationService;
+    private final MemberService memberService;
 
     private List<Member> members;
     private boolean unsavedChanges = false;
 
-    public DatabaseCommandLineRunner(DatabaseService databaseService, ValidationService validationService) {
+    public DatabaseCommandLineRunner(DatabaseService databaseService,
+                                     ValidationService validationService,
+                                     MemberService memberService) {
         this.databaseService = databaseService;
         this.validationService = validationService;
+        this.memberService = memberService;
     }
 
     @Override
@@ -65,9 +73,11 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
                 case "2" -> updateMember(scanner);
                 case "3" -> runValidation();
                 case "4" -> listAllMembers(scanner);
-                case "5" -> saveDatabase();
-                case "6" -> running = confirmExit(scanner);
-                default -> System.out.println("Invalid option. Please enter 1-6.");
+                case "5" -> bulkUpdateRaceNumbers(scanner);
+                case "6" -> listAvailableRaceNumbers(scanner);
+                case "7" -> saveDatabase();
+                case "8" -> running = confirmExit(scanner);
+                default -> System.out.println("Invalid option. Please enter 1-8.");
             }
         }
 
@@ -83,8 +93,10 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
         System.out.println("  2. Update Member");
         System.out.println("  3. Re-run Validation");
         System.out.println("  4. List All Members");
-        System.out.println("  5. Save Database");
-        System.out.println("  6. Exit");
+        System.out.println("  5. Bulk Update Race Numbers (Plate 20)");
+        System.out.println("  6. Available Race Numbers");
+        System.out.println("  7. Save Database");
+        System.out.println("  8. Exit");
         if (unsavedChanges) {
             System.out.println("  ** Unsaved changes pending **");
         }
@@ -97,10 +109,9 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
     private void searchAndViewMember(Scanner scanner) {
         System.out.print("\nSearch by name or license number: ");
         String query = scanner.nextLine().trim();
-        if (query.isEmpty())
-            return;
+        if (query.isEmpty()) return;
 
-        List<Member> results = searchMembers(query);
+        List<Member> results = memberService.search(members, query);
         if (results.isEmpty()) {
             System.out.println("No members found matching: " + query);
             return;
@@ -118,8 +129,7 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
 
         System.out.print("Select member number to view details (or Enter to go back): ");
         String selection = scanner.nextLine().trim();
-        if (selection.isEmpty())
-            return;
+        if (selection.isEmpty()) return;
 
         try {
             int idx = Integer.parseInt(selection) - 1;
@@ -136,10 +146,9 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
     private void updateMember(Scanner scanner) {
         System.out.print("\nSearch for member to update (name or license number): ");
         String query = scanner.nextLine().trim();
-        if (query.isEmpty())
-            return;
+        if (query.isEmpty()) return;
 
-        List<Member> results = searchMembers(query);
+        List<Member> results = memberService.search(members, query);
         if (results.isEmpty()) {
             System.out.println("No members found matching: " + query);
             return;
@@ -183,8 +192,7 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
         }
         System.out.print("Select field number (or Enter to cancel): ");
         String fieldSelection = scanner.nextLine().trim();
-        if (fieldSelection.isEmpty())
-            return;
+        if (fieldSelection.isEmpty()) return;
 
         try {
             int fieldIdx = Integer.parseInt(fieldSelection) - 1;
@@ -193,7 +201,7 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
                 return;
             }
 
-            String fieldName = fieldNames.get(fieldIdx);
+            String fieldName    = fieldNames.get(fieldIdx);
             String currentValue = databaseService.getFieldValue(target, fieldName);
             System.out.printf("Current value of '%s': %s%n", fieldName,
                     currentValue != null ? currentValue : "(empty)");
@@ -205,15 +213,12 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
                 return;
             }
 
-            // Apply the update
             String oldValue = currentValue != null ? currentValue : "(empty)";
             if (databaseService.updateMemberField(target, fieldName, newValue)) {
                 System.out.printf("Updated '%s' for %s %s: '%s' -> '%s'%n",
-                        fieldName, target.getGivenName(), target.getFamilyName(),
-                        oldValue, newValue);
+                        fieldName, target.getGivenName(), target.getFamilyName(), oldValue, newValue);
                 unsavedChanges = true;
 
-                // Re-validate after update
                 System.out.println("\nRe-validating after update...");
                 List<ValidationIssue> issues = validationService.validateAll(members);
                 if (!issues.isEmpty()) {
@@ -248,13 +253,13 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
     }
 
     private void listAllMembers(Scanner scanner) {
-        int pageSize = 20;
+        int pageSize   = 20;
         int totalPages = (members.size() + pageSize - 1) / pageSize;
         int currentPage = 0;
 
         while (true) {
             int start = currentPage * pageSize;
-            int end = Math.min(start + pageSize, members.size());
+            int end   = Math.min(start + pageSize, members.size());
 
             System.out.printf("\n═══ Members %d-%d of %d (Page %d/%d) ═══%n",
                     start + 1, end, members.size(), currentPage + 1, totalPages);
@@ -268,23 +273,137 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
 
             switch (cmd) {
                 case "N" -> {
-                    if (currentPage < totalPages - 1)
-                        currentPage++;
-                    else
-                        System.out.println("Already on last page.");
+                    if (currentPage < totalPages - 1) currentPage++;
+                    else System.out.println("Already on last page.");
                 }
                 case "P" -> {
-                    if (currentPage > 0)
-                        currentPage--;
-                    else
-                        System.out.println("Already on first page.");
+                    if (currentPage > 0) currentPage--;
+                    else System.out.println("Already on first page.");
                 }
-                case "Q", "" -> {
-                    return;
-                }
+                case "Q", "" -> { return; }
                 default -> System.out.println("Invalid option.");
             }
         }
+    }
+
+    private void bulkUpdateRaceNumbers(Scanner scanner) {
+        System.out.println("\n═══════════════ Bulk Update Race Numbers (Plate 20) ═══════════════");
+        System.out.println("Enter entries as 'First Last, PlateNumber', one per line.");
+        System.out.println("Enter an empty line when done.");
+        System.out.println("─────────────────────────────────────────────────────────────────");
+
+        List<String> inputLines = new ArrayList<>();
+        while (true) {
+            System.out.print("> ");
+            String line = scanner.nextLine().trim();
+            if (line.isEmpty()) break;
+            inputLines.add(line);
+        }
+
+        BulkUpdateResult result = memberService.bulkUpdatePlate20(members, inputLines);
+
+        System.out.println("─────────────────────────────────────────────────────────────────");
+
+        for (BulkUpdateResult.AppliedUpdate u : result.applied()) {
+            System.out.printf("  Updated %-30s Plate 20: '%s' -> '%s'%n",
+                    u.member().getGivenName() + " " + u.member().getFamilyName(),
+                    u.oldValue() != null ? u.oldValue() : "(empty)", u.newValue());
+            log.info("Bulk update: set Plate 20 for {} {} [{}] to '{}'",
+                    u.member().getGivenName(), u.member().getFamilyName(),
+                    u.member().getLicenseNumber(), u.newValue());
+        }
+
+        for (BulkUpdateResult.SkippedEntry s : result.skipped()) {
+            System.out.printf("  ERROR: %s — input: '%s'%n", s.reason(), s.input());
+            if (!s.matches().isEmpty()) {
+                for (Member m : s.matches()) {
+                    System.out.printf("           %s%n", m.toSummary());
+                }
+            }
+            log.error("Bulk update skipped: {} — input: '{}'", s.reason(), s.input());
+        }
+
+        System.out.printf("  Done. %d updated, %d skipped.%n",
+                result.applied().size(), result.skipped().size());
+
+        if (!result.applied().isEmpty()) {
+            unsavedChanges = true;
+            System.out.println("\nRe-validating...");
+            List<ValidationIssue> issues = validationService.validateAll(members);
+            if (!issues.isEmpty()) {
+                System.out.println("WARNING: Validation issues detected after bulk update:");
+                for (ValidationIssue issue : issues) {
+                    System.out.print(issue.format());
+                }
+            } else {
+                System.out.println("Validation passed.");
+            }
+        }
+    }
+
+    private void listAvailableRaceNumbers(Scanner scanner) {
+        System.out.println("\n═══════════════ Available Race Numbers (101+) ═══════════════");
+        System.out.println("  Select plate category:");
+        System.out.println("    1. Plate 20");
+        System.out.println("    2. Plate 24");
+        System.out.println("    3. Plate Retro");
+        System.out.println("    4. Plate Open");
+        System.out.print("  Category (or Enter to cancel): ");
+
+        String categoryChoice = scanner.nextLine().trim();
+        String fieldName = switch (categoryChoice) {
+            case "1" -> "Plate 20";
+            case "2" -> "Plate 24";
+            case "3" -> "Plate Retro";
+            case "4" -> "Plate Open";
+            default  -> null;
+        };
+
+        if (fieldName == null) {
+            System.out.println("Cancelled.");
+            return;
+        }
+
+        AvailableNumbersResult result = memberService.getAvailableRaceNumbers(members, fieldName);
+
+        System.out.printf("%n  Category     : %s%n", result.fieldName());
+        System.out.printf("  Stale cutoff : licenses expired before %s (3+ years ago)%n", result.staleCutoff());
+
+        System.out.println("\n  ── Reclaimable (assigned to riders with stale licenses) ──");
+        if (result.reclaimable().isEmpty()) {
+            System.out.println("    None.");
+        } else {
+            for (AvailableNumbersResult.StaleAssignment s : result.reclaimable()) {
+                Member m = s.member();
+                System.out.printf("    %4d  —  %s %s  [%s]  expired: %s%n",
+                        s.plateNumber(),
+                        m.getGivenName()  != null ? m.getGivenName()  : "",
+                        m.getFamilyName() != null ? m.getFamilyName() : "",
+                        m.getLicenseNumber(),
+                        m.getLicenseExpiry() != null ? m.getLicenseExpiry() : "unknown");
+            }
+        }
+
+        System.out.printf("%n  ── Unassigned numbers in range 101–%d ──%n", result.maxRange());
+        if (result.unassigned().isEmpty()) {
+            System.out.println("    None.");
+        } else {
+            StringBuilder row = new StringBuilder("    ");
+            List<Integer> unassigned = result.unassigned();
+            for (int i = 0; i < unassigned.size(); i++) {
+                row.append(String.format("%4d", unassigned.get(i)));
+                if ((i + 1) % 15 == 0) {
+                    System.out.println(row);
+                    row = new StringBuilder("    ");
+                }
+            }
+            if (row.length() > 4) System.out.println(row);
+        }
+
+        System.out.printf("%n  Total available: %d (%d reclaimable, %d unassigned in range 101–%d)%n",
+                result.totalAvailable(), result.reclaimable().size(),
+                result.unassigned().size(), result.maxRange());
+        System.out.println("═════════════════════════════════════════════════════════════");
     }
 
     private void saveDatabase() {
@@ -307,25 +426,5 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
             }
         }
         return false; // false = stop running
-    }
-
-    // ---- Search helper ----
-
-    private List<Member> searchMembers(String query) {
-        String lowerQuery = query.toLowerCase();
-        return members.stream()
-                .filter(m -> {
-                    String licNum = m.getLicenseNumber() != null ? m.getLicenseNumber().toLowerCase() : "";
-                    String given = m.getGivenName() != null ? m.getGivenName().toLowerCase() : "";
-                    String family = m.getFamilyName() != null ? m.getFamilyName().toLowerCase() : "";
-                    String club = m.getClubName() != null ? m.getClubName().toLowerCase() : "";
-
-                    return licNum.contains(lowerQuery)
-                            || given.contains(lowerQuery)
-                            || family.contains(lowerQuery)
-                            || club.contains(lowerQuery)
-                            || (given + " " + family).contains(lowerQuery);
-                })
-                .collect(Collectors.toList());
     }
 }
