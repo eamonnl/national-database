@@ -1,14 +1,19 @@
 package com.bmxireland.nationaldb.service;
 
-import com.bmxireland.nationaldb.model.Member;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import com.bmxireland.nationaldb.model.Member;
+import com.bmxireland.nationaldb.model.RegistrationEntry;
 
 class MemberServiceTest {
 
@@ -83,7 +88,7 @@ class MemberServiceTest {
                 member("LIC001", "Alice", "Smith", "101", "2025-12-31")
         );
 
-        var result = memberService.bulkUpdatePlate20(members, List.of("Alice Smith, 999"));
+        var result = memberService.bulkUpdatePlate20(members, List.of("Alice Smith  #999"));
 
         assertEquals(1, result.applied().size());
         assertEquals(0, result.skipped().size());
@@ -94,7 +99,7 @@ class MemberServiceTest {
 
     @Test
     void bulkUpdate_noMatch_isSkipped() {
-        var result = memberService.bulkUpdatePlate20(sampleMembers(), List.of("Unknown Person, 999"));
+        var result = memberService.bulkUpdatePlate20(sampleMembers(), List.of("Unknown Person #999"));
 
         assertEquals(0, result.applied().size());
         assertEquals(1, result.skipped().size());
@@ -104,7 +109,7 @@ class MemberServiceTest {
     @Test
     void bulkUpdate_ambiguousMatch_isSkipped() {
         // "Alice" matches both Alice Smith and Alice Johnson
-        var result = memberService.bulkUpdatePlate20(sampleMembers(), List.of("Alice, 999"));
+        var result = memberService.bulkUpdatePlate20(sampleMembers(), List.of("Alice #999"));
 
         assertEquals(0, result.applied().size());
         assertEquals(1, result.skipped().size());
@@ -113,7 +118,7 @@ class MemberServiceTest {
     }
 
     @Test
-    void bulkUpdate_missingComma_isSkipped() {
+    void bulkUpdate_missingHash_isSkipped() {
         var result = memberService.bulkUpdatePlate20(sampleMembers(), List.of("Alice Smith 999"));
 
         assertEquals(0, result.applied().size());
@@ -122,12 +127,23 @@ class MemberServiceTest {
     }
 
     @Test
-    void bulkUpdate_emptyPlateNumber_isSkipped() {
-        var result = memberService.bulkUpdatePlate20(sampleMembers(), List.of("Alice Smith, "));
+    void bulkUpdate_hashWithNoDigits_isSkipped() {
+        var result = memberService.bulkUpdatePlate20(sampleMembers(), List.of("Alice Smith #"));
 
         assertEquals(0, result.applied().size());
         assertEquals(1, result.skipped().size());
-        assertTrue(result.skipped().get(0).reason().contains("empty"));
+        assertTrue(result.skipped().get(0).reason().contains("No plate number"));
+    }
+
+    @Test
+    void bulkUpdate_trailingNotesAreIgnored() {
+        List<Member> members = List.of(member("LIC001", "Alice", "Smith", "101", "2025-12-31"));
+
+        var result = memberService.bulkUpdatePlate20(members,
+                List.of("Alice Smith  #999  (need Full license details)"));
+
+        assertEquals(1, result.applied().size());
+        assertEquals("999", members.get(0).getPlate20());
     }
 
     @Test
@@ -150,7 +166,7 @@ class MemberServiceTest {
         );
 
         var result = memberService.bulkUpdatePlate20(members,
-                List.of("Alice Smith, 201", "Unknown, 999", "Bob Jones, 202"));
+                List.of("Alice Smith  #201", "Unknown #999", "Bob Jones  #202"));
 
         assertEquals(2, result.applied().size());
         assertEquals(1, result.skipped().size());
@@ -260,5 +276,145 @@ class MemberServiceTest {
     void isLicenseStale_unparsableExpiry_returnsFalse() {
         Member m = member("LIC001", "Alice", "Smith", null, "not-a-date");
         assertFalse(memberService.isLicenseStale(m, LocalDate.now()));
+    }
+
+    // ---- importRegistrationData ----
+
+    private RegistrationEntry entry(String newOrRenewal, String licenseNumber, String memberId,
+                                    String firstName, String lastName, String dob, String expiry) {
+        return new RegistrationEntry(
+                "Dublin BMX", "2026-01-01", expiry, newOrRenewal,
+                licenseNumber, memberId, "Adult",
+                firstName, lastName, "test@example.com",
+                dob, "MALE", "IRL", "Emergency Contact", "0851234567");
+    }
+
+    private Member memberWithMid(String licenseNumber, String givenName, String familyName,
+                                 String dob, String mid) {
+        Member m = new Member();
+        m.setLicenseNumber(licenseNumber);
+        m.setGivenName(givenName);
+        m.setFamilyName(familyName);
+        m.setBirthDate(dob);
+        m.setInternationalLicense(mid);
+        return m;
+    }
+
+    @Test
+    void import_matchByMid_updatesLicenseAndExpiry() {
+        Member existing = memberWithMid("25U001", "Alice", "Smith", "1990-01-01", "MID-100");
+        List<Member> members = new ArrayList<>(List.of(existing));
+        var entries = List.of(entry("RENEWAL", "26U001", "MID-100", "Alice", "Smith", "1990-01-01", "2026-12-31"));
+
+        var result = memberService.importRegistrationData(members, entries);
+
+        assertEquals(1, result.updated().size());
+        assertEquals(0, result.added().size());
+        assertEquals(0, result.skipped().size());
+        assertEquals("26U001", existing.getLicenseNumber());
+        assertEquals("2026-12-31", existing.getLicenseExpiry());
+        assertEquals("Yes", existing.getActive());
+        assertEquals("MID", result.updated().get(0).matchMethod());
+    }
+
+    @Test
+    void import_matchByLicenseNumber_updatesExpiry() {
+        Member existing = memberWithMid("26U001", "Alice", "Smith", "1990-01-01", null);
+        List<Member> members = new ArrayList<>(List.of(existing));
+        var entries = List.of(entry("RENEWAL", "26U001", "MID-200", "Alice", "Smith", "1990-01-01", "2026-12-31"));
+
+        var result = memberService.importRegistrationData(members, entries);
+
+        assertEquals(1, result.updated().size());
+        assertEquals("licence number", result.updated().get(0).matchMethod());
+        // MID should be backfilled since it was empty
+        assertEquals("MID-200", existing.getInternationalLicense());
+    }
+
+    @Test
+    void import_matchByNameAndDob_fallback() {
+        Member existing = memberWithMid("25U999", "Alice", "Smith", "1990-01-01", null);
+        List<Member> members = new ArrayList<>(List.of(existing));
+        // Different licence number, no MID — falls through to name+DOB
+        var entries = List.of(entry("RENEWAL", "26U001", "MID-300", "Alice", "Smith", "1990-01-01", "2026-12-31"));
+
+        var result = memberService.importRegistrationData(members, entries);
+
+        assertEquals(1, result.updated().size());
+        assertEquals("name + DOB", result.updated().get(0).matchMethod());
+        assertEquals("26U001", existing.getLicenseNumber());
+        assertEquals("MID-300", existing.getInternationalLicense());
+    }
+
+    @Test
+    void import_midWithLeadingZeros_matchesNumerically() {
+        Member existing = memberWithMid("25U001", "Alice", "Smith", "1990-01-01", "289679");
+        List<Member> members = new ArrayList<>(List.of(existing));
+        var entries = List.of(entry("RENEWAL", "26U001", "0289679", "Alice", "Smith", "1990-01-01", "2026-12-31"));
+
+        var result = memberService.importRegistrationData(members, entries);
+
+        assertEquals(1, result.updated().size());
+        assertEquals("MID", result.updated().get(0).matchMethod());
+    }
+
+    @Test
+    void import_newEntry_noMatch_addsMember() {
+        List<Member> members = new ArrayList<>();
+        var entries = List.of(entry("NEW", "26U001", "MID-400", "Bob", "Jones", "2000-05-10", "2026-12-31"));
+
+        var result = memberService.importRegistrationData(members, entries);
+
+        assertEquals(0, result.updated().size());
+        assertEquals(1, result.added().size());
+        assertEquals(0, result.skipped().size());
+        assertEquals(1, members.size());
+        Member added = members.get(0);
+        assertEquals("Bob", added.getGivenName());
+        assertEquals("Jones", added.getFamilyName());
+        assertEquals("26U001", added.getLicenseNumber());
+        assertEquals("MID-400", added.getInternationalLicense());
+        assertEquals("Male", added.getGender());
+        assertEquals("Yes", added.getActive());
+    }
+
+    @Test
+    void import_renewalNoMatch_isSkipped() {
+        List<Member> members = new ArrayList<>();
+        var entries = List.of(entry("RENEWAL", "26U001", "MID-500", "Unknown", "Person", "1985-03-15", "2026-12-31"));
+
+        var result = memberService.importRegistrationData(members, entries);
+
+        assertEquals(0, result.updated().size());
+        assertEquals(0, result.added().size());
+        assertEquals(1, result.skipped().size());
+        assertTrue(result.skipped().get(0).reason().contains("RENEWAL not matched"));
+    }
+
+    @Test
+    void import_ambiguousNameDobMatch_isSkipped() {
+        // Two members with same name and DOB — ambiguous fallback
+        Member a = memberWithMid("25U001", "John", "Murphy", "2000-05-01", null);
+        Member b = memberWithMid("25U002", "John", "Murphy", "2000-05-01", null);
+        List<Member> members = new ArrayList<>(List.of(a, b));
+        var entries = List.of(entry("RENEWAL", "26U999", null, "John", "Murphy", "2000-05-01", "2026-12-31"));
+
+        var result = memberService.importRegistrationData(members, entries);
+
+        assertEquals(0, result.updated().size());
+        assertEquals(1, result.skipped().size());
+        assertTrue(result.skipped().get(0).reason().contains("Ambiguous"));
+    }
+
+    @Test
+    void import_doesNotOverwriteExistingMid() {
+        Member existing = memberWithMid("25U001", "Alice", "Smith", "1990-01-01", "EXISTING-MID");
+        List<Member> members = new ArrayList<>(List.of(existing));
+        var entries = List.of(entry("RENEWAL", "26U001", "DIFFERENT-MID", "Alice", "Smith", "1990-01-01", "2026-12-31"));
+
+        memberService.importRegistrationData(members, entries);
+
+        // MID matched — existing MID should not be overwritten
+        assertEquals("EXISTING-MID", existing.getInternationalLicense());
     }
 }

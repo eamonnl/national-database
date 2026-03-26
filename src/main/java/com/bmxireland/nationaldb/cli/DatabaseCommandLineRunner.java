@@ -11,10 +11,12 @@ import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 
 import com.bmxireland.nationaldb.model.Member;
+import com.bmxireland.nationaldb.model.RegistrationEntry;
 import com.bmxireland.nationaldb.service.DatabaseService;
 import com.bmxireland.nationaldb.service.MemberService;
 import com.bmxireland.nationaldb.service.MemberService.AvailableNumbersResult;
 import com.bmxireland.nationaldb.service.MemberService.BulkUpdateResult;
+import com.bmxireland.nationaldb.service.MemberService.ImportResult;
 import com.bmxireland.nationaldb.service.ValidationService;
 import com.bmxireland.nationaldb.service.ValidationService.ValidationIssue;
 
@@ -75,9 +77,10 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
                 case "4" -> listAllMembers(scanner);
                 case "5" -> bulkUpdateRaceNumbers(scanner);
                 case "6" -> listAvailableRaceNumbers(scanner);
-                case "7" -> saveDatabase();
-                case "8" -> running = confirmExit(scanner);
-                default -> System.out.println("Invalid option. Please enter 1-8.");
+                case "7" -> importRegistrationFile(scanner);
+                case "8" -> saveDatabase();
+                case "9" -> running = confirmExit(scanner);
+                default -> System.out.println("Invalid option. Please enter 1-9.");
             }
         }
 
@@ -95,8 +98,9 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
         System.out.println("  4. List All Members");
         System.out.println("  5. Bulk Update Race Numbers (Plate 20)");
         System.out.println("  6. Available Race Numbers");
-        System.out.println("  7. Save Database");
-        System.out.println("  8. Exit");
+        System.out.println("  7. Import Registration File");
+        System.out.println("  8. Save Database");
+        System.out.println("  9. Exit");
         if (unsavedChanges) {
             System.out.println("  ** Unsaved changes pending **");
         }
@@ -288,7 +292,8 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
 
     private void bulkUpdateRaceNumbers(Scanner scanner) {
         System.out.println("\n═══════════════ Bulk Update Race Numbers (Plate 20) ═══════════════");
-        System.out.println("Enter entries as 'First Last, PlateNumber', one per line.");
+        System.out.println("Enter entries as 'First Last  #PlateNumber', one per line.");
+        System.out.println("Trailing notes are ignored, e.g. 'Adam Hosback  #342  (needs full license)'");
         System.out.println("Enter an empty line when done.");
         System.out.println("─────────────────────────────────────────────────────────────────");
 
@@ -404,6 +409,81 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
                 result.totalAvailable(), result.reclaimable().size(),
                 result.unassigned().size(), result.maxRange());
         System.out.println("═════════════════════════════════════════════════════════════");
+    }
+
+    private void importRegistrationFile(Scanner scanner) {
+        System.out.println("\n═══════════════ Import Registration File ═══════════════");
+        System.out.print("  Enter path to registration xlsx file: ");
+        String filePath = scanner.nextLine().trim();
+        if (filePath.isEmpty()) {
+            System.out.println("Cancelled.");
+            return;
+        }
+
+        List<RegistrationEntry> entries;
+        try {
+            entries = databaseService.loadRegistrationFile(filePath);
+        } catch (IOException e) {
+            System.err.println("  ERROR: Could not read file: " + e.getMessage());
+            log.error("Failed to load registration file: {}", filePath, e);
+            return;
+        }
+
+        System.out.printf("  Loaded %d entries from file.%n", entries.size());
+
+        ImportResult result = memberService.importRegistrationData(members, entries);
+
+        System.out.println("\n  ── Updated (existing members) ──");
+        if (result.updated().isEmpty()) {
+            System.out.println("    None.");
+        } else {
+            for (ImportResult.UpdatedEntry u : result.updated()) {
+                System.out.printf("    %-25s  licence: %-12s -> %-12s  (matched by %s)%n",
+                        u.member().getGivenName() + " " + u.member().getFamilyName(),
+                        u.oldLicenseNumber() != null ? u.oldLicenseNumber() : "(empty)",
+                        u.newLicenseNumber(),
+                        u.matchMethod());
+            }
+        }
+
+        System.out.println("\n  ── Added (new members) ──");
+        if (result.added().isEmpty()) {
+            System.out.println("    None.");
+        } else {
+            for (Member m : result.added()) {
+                System.out.printf("    %-25s  licence: %s%n",
+                        m.getGivenName() + " " + m.getFamilyName(), m.getLicenseNumber());
+            }
+        }
+
+        System.out.println("\n  ── Skipped ──");
+        if (result.skipped().isEmpty()) {
+            System.out.println("    None.");
+        } else {
+            for (ImportResult.SkippedEntry s : result.skipped()) {
+                System.out.printf("    %-25s  [%s]  reason: %s%n",
+                        s.firstName() + " " + s.lastName(), s.licenseNumber(), s.reason());
+                log.warn("Import skipped: {} {} [{}] — {}", s.firstName(), s.lastName(),
+                        s.licenseNumber(), s.reason());
+            }
+        }
+
+        System.out.printf("%n  Done. %d updated, %d added, %d skipped.%n",
+                result.updated().size(), result.added().size(), result.skipped().size());
+
+        if (!result.updated().isEmpty() || !result.added().isEmpty()) {
+            unsavedChanges = true;
+            System.out.println("\nRe-validating...");
+            var issues = validationService.validateAll(members);
+            if (!issues.isEmpty()) {
+                System.out.println("WARNING: Validation issues after import:");
+                for (var issue : issues) System.out.print(issue.format());
+            } else {
+                System.out.println("Validation passed.");
+            }
+        }
+
+        System.out.println("═════════════════════════════════════════════════════");
     }
 
     private void saveDatabase() {

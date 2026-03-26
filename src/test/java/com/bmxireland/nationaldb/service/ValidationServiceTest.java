@@ -1,12 +1,14 @@
 package com.bmxireland.nationaldb.service;
 
-import com.bmxireland.nationaldb.model.Member;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 
-import static org.junit.jupiter.api.Assertions.*;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+
+import com.bmxireland.nationaldb.model.Member;
 
 class ValidationServiceTest {
 
@@ -20,8 +22,8 @@ class ValidationServiceTest {
     // ---- Helpers ----
 
     private Member member(String licenseNumber, String givenName, String familyName,
-                          String birthDate, String internationalLicense,
-                          String plate20, String licenseExpiry) {
+            String birthDate, String internationalLicense,
+            String plate20, String licenseExpiry) {
         Member m = new Member();
         m.setLicenseNumber(licenseNumber);
         m.setGivenName(givenName);
@@ -43,7 +45,7 @@ class ValidationServiceTest {
     @Test
     void duplicatePlate20_isDetected() {
         Member a = member("LIC001", "Alice", "Smith", "1990-01-01", null, "42", null);
-        Member b = member("LIC002", "Bob",   "Jones", "1985-06-15", null, "42", null);
+        Member b = member("LIC002", "Bob", "Jones", "1985-06-15", null, "42", null);
 
         var issues = validationService.validateNoDuplicateRaceNumbers(List.of(a, b));
 
@@ -56,7 +58,7 @@ class ValidationServiceTest {
     @Test
     void duplicatePlate20_caseInsensitive() {
         Member a = member("LIC001", "Alice", "Smith", "1990-01-01", null, "abc", null);
-        Member b = member("LIC002", "Bob",   "Jones", "1985-06-15", null, "ABC", null);
+        Member b = member("LIC002", "Bob", "Jones", "1985-06-15", null, "ABC", null);
 
         var issues = validationService.validateNoDuplicateRaceNumbers(List.of(a, b));
 
@@ -65,8 +67,8 @@ class ValidationServiceTest {
 
     @Test
     void blankAndNonePlates_areIgnored() {
-        Member a = member("LIC001", "Alice", "Smith", "1990-01-01", null, null,   null);
-        Member b = member("LIC002", "Bob",   "Jones", "1985-06-15", null, "",     null);
+        Member a = member("LIC001", "Alice", "Smith", "1990-01-01", null, null, null);
+        Member b = member("LIC002", "Bob", "Jones", "1985-06-15", null, "", null);
         Member c = member("LIC003", "Carol", "Brown", "2000-03-10", null, "None", null);
 
         var issues = validationService.validateNoDuplicateRaceNumbers(List.of(a, b, c));
@@ -77,7 +79,7 @@ class ValidationServiceTest {
     @Test
     void uniquePlates_produceNoIssues() {
         Member a = member("LIC001", "Alice", "Smith", "1990-01-01", null, "101", null);
-        Member b = member("LIC002", "Bob",   "Jones", "1985-06-15", null, "102", null);
+        Member b = member("LIC002", "Bob", "Jones", "1985-06-15", null, "102", null);
 
         var issues = validationService.validateNoDuplicateRaceNumbers(List.of(a, b));
 
@@ -89,7 +91,7 @@ class ValidationServiceTest {
     @Test
     void duplicateTransponder20_isDetected() {
         Member a = withTransponder20(member("LIC001", "Alice", "Smith", "1990-01-01", null, null, null), "T-999");
-        Member b = withTransponder20(member("LIC002", "Bob",   "Jones", "1985-06-15", null, null, null), "T-999");
+        Member b = withTransponder20(member("LIC002", "Bob", "Jones", "1985-06-15", null, null, null), "T-999");
 
         var issues = validationService.validateNoDuplicateTransponderNumbers(List.of(a, b));
 
@@ -100,7 +102,7 @@ class ValidationServiceTest {
     @Test
     void uniqueTransponders_produceNoIssues() {
         Member a = withTransponder20(member("LIC001", "Alice", "Smith", "1990-01-01", null, null, null), "T-001");
-        Member b = withTransponder20(member("LIC002", "Bob",   "Jones", "1985-06-15", null, null, null), "T-002");
+        Member b = withTransponder20(member("LIC002", "Bob", "Jones", "1985-06-15", null, null, null), "T-002");
 
         var issues = validationService.validateNoDuplicateTransponderNumbers(List.of(a, b));
 
@@ -123,7 +125,7 @@ class ValidationServiceTest {
     @Test
     void similarNameAndSameDob_oneIntlIdMissing_isFlagged() {
         // "Jon" vs "John" — Levenshtein distance 1
-        Member a = member("LIC2023", "Jon",  "Murphy", "2000-05-01", null,    null, null);
+        Member a = member("LIC2023", "Jon", "Murphy", "2000-05-01", null, null, null);
         Member b = member("LIC2024", "John", "Murphy", "2000-05-01", "IRL99", null, null);
 
         var issues = validationService.validateNoPossibleDuplicateMembers(List.of(a, b));
@@ -153,8 +155,8 @@ class ValidationServiceTest {
 
     @Test
     void sameDobButVeryDifferentNames_isNotFlagged() {
-        Member a = member("LIC2023", "Alice", "Smith",  "2000-05-01", null, null, null);
-        Member b = member("LIC2024", "Bob",   "Jones",  "2000-05-01", null, null, null);
+        Member a = member("LIC2023", "Alice", "Smith", "2000-05-01", null, null, null);
+        Member b = member("LIC2024", "Bob", "Jones", "2000-05-01", null, null, null);
 
         var issues = validationService.validateNoPossibleDuplicateMembers(List.of(a, b));
 
@@ -164,7 +166,7 @@ class ValidationServiceTest {
     @Test
     void reversedNameOrder_isFlagged() {
         Member a = member("LIC2023", "Murphy", "John", "2000-05-01", null, null, null);
-        Member b = member("LIC2024", "John",   "Murphy", "2000-05-01", null, null, null);
+        Member b = member("LIC2024", "John", "Murphy", "2000-05-01", null, null, null);
 
         var issues = validationService.validateNoPossibleDuplicateMembers(List.of(a, b));
 

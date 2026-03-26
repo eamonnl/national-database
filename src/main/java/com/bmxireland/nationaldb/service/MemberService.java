@@ -1,6 +1,7 @@
 package com.bmxireland.nationaldb.service;
 
 import com.bmxireland.nationaldb.model.Member;
+import com.bmxireland.nationaldb.model.RegistrationEntry;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
 
@@ -81,19 +82,31 @@ public class MemberService {
         for (String line : inputLines) {
             if (line == null || line.isBlank()) continue;
 
-            int commaIdx = line.lastIndexOf(',');
-            if (commaIdx == -1) {
+            int hashIdx = line.indexOf('#');
+            if (hashIdx == -1) {
                 skipped.add(new BulkUpdateResult.SkippedEntry(
-                        line, "Invalid format: expected 'Name, PlateNumber'", List.of()));
+                        line, "Invalid format: expected 'Name #123'", List.of()));
                 continue;
             }
 
-            String name        = line.substring(0, commaIdx).trim();
-            String plateNumber = line.substring(commaIdx + 1).trim();
+            String name = line.substring(0, hashIdx).trim();
 
-            if (name.isEmpty() || plateNumber.isEmpty()) {
+            // Extract leading digits after '#'; anything following (spaces, notes) is ignored
+            String afterHash = line.substring(hashIdx + 1).trim();
+            int digitEnd = 0;
+            while (digitEnd < afterHash.length() && Character.isDigit(afterHash.charAt(digitEnd))) {
+                digitEnd++;
+            }
+            String plateNumber = afterHash.substring(0, digitEnd);
+
+            if (name.isEmpty()) {
                 skipped.add(new BulkUpdateResult.SkippedEntry(
-                        line, "Name or plate number is empty", List.of()));
+                        line, "Name is empty", List.of()));
+                continue;
+            }
+            if (plateNumber.isEmpty()) {
+                skipped.add(new BulkUpdateResult.SkippedEntry(
+                        line, "No plate number found after '#'", List.of()));
                 continue;
             }
 
@@ -154,6 +167,164 @@ public class MemberService {
         }
 
         return new AvailableNumbersResult(fieldName, cutoff, reclaimable, unassigned, maxRange);
+    }
+
+    /**
+     * Imports registration data from a Cycling Ireland export file into the member list.
+     *
+     * Matching is attempted in priority order:
+     *   1. By MID (internationalLicense) — most reliable, survives annual license changes
+     *   2. By current licenseNumber — exact match
+     *   3. By full name + DOB — fallback for renewals where MID and license differ
+     *
+     * On match: licenseNumber, licenseExpiry, and active are updated. internationalLicense
+     * is set if it was previously empty (fixing the root cause of duplicate rows).
+     *
+     * On no match for a NEW entry: a new member row is added.
+     * On no match for a RENEWAL entry: the row is skipped and logged.
+     */
+    public ImportResult importRegistrationData(List<Member> members, List<RegistrationEntry> entries) {
+        List<ImportResult.UpdatedEntry> updated = new ArrayList<>();
+        List<Member>                   added   = new ArrayList<>();
+        List<ImportResult.SkippedEntry> skipped = new ArrayList<>();
+
+        // Build lookup maps for fast matching
+        Map<String, Member> byMid     = new HashMap<>();
+        Map<String, Member> byLicense = new HashMap<>();
+        for (Member m : members) {
+            if (m.getInternationalLicense() != null && !m.getInternationalLicense().isBlank()) {
+                byMid.put(m.getInternationalLicense().trim(), m);
+            }
+            if (m.getLicenseNumber() != null && !m.getLicenseNumber().isBlank()) {
+                byLicense.put(m.getLicenseNumber().trim(), m);
+            }
+        }
+
+        for (RegistrationEntry entry : entries) {
+            Member match = null;
+            String matchMethod = null;
+
+            // 1. Match by MID
+            if (entry.memberId() != null && !entry.memberId().isBlank()) {
+                match = findByMid(byMid, entry.memberId().trim());
+                if (match != null) matchMethod = "MID";
+            }
+
+            // 2. Match by licence number
+            if (match == null && entry.licenseNumber() != null && !entry.licenseNumber().isBlank()) {
+                match = byLicense.get(entry.licenseNumber().trim());
+                if (match != null) matchMethod = "licence number";
+            }
+
+            // 3. Fallback: name + DOB (for renewals where licence changed and MID was missing)
+            if (match == null) {
+                String fullName = trim(entry.firstName()) + " " + trim(entry.lastName());
+                List<Member> nameMatches = search(members, fullName.trim());
+                List<Member> dobMatches = nameMatches.stream()
+                        .filter(m -> trim(entry.dateOfBirth()).equalsIgnoreCase(trim(m.getBirthDate())))
+                        .collect(Collectors.toList());
+                if (dobMatches.size() == 1) {
+                    match = dobMatches.get(0);
+                    matchMethod = "name + DOB";
+                } else if (dobMatches.size() > 1) {
+                    skipped.add(new ImportResult.SkippedEntry(entry.firstName(), entry.lastName(),
+                            entry.licenseNumber(),
+                            "Ambiguous: name + DOB matched " + dobMatches.size() + " members"));
+                    continue;
+                }
+            }
+
+            if (match != null) {
+                String oldLicense = match.getLicenseNumber();
+                match.setLicenseNumber(entry.licenseNumber());
+                match.setLicenseExpiry(entry.expiryDate());
+                match.setActive("Yes");
+                // Backfill MID if missing — fixes root cause of duplicate row problem
+                if ((match.getInternationalLicense() == null || match.getInternationalLicense().isBlank())
+                        && entry.memberId() != null && !entry.memberId().isBlank()) {
+                    match.setInternationalLicense(entry.memberId());
+                }
+                updated.add(new ImportResult.UpdatedEntry(match, oldLicense, entry.licenseNumber(), matchMethod));
+
+                // Keep lookup maps current so later entries in the same file don't re-match
+                if (entry.licenseNumber() != null) byLicense.put(entry.licenseNumber().trim(), match);
+
+            } else if ("NEW".equalsIgnoreCase(trim(entry.newOrRenewal()))) {
+                Member newMember = buildMember(entry, members.size() + added.size());
+                added.add(newMember);
+                if (newMember.getLicenseNumber() != null) byLicense.put(newMember.getLicenseNumber().trim(), newMember);
+                if (newMember.getInternationalLicense() != null) byMid.put(newMember.getInternationalLicense().trim(), newMember);
+
+            } else {
+                skipped.add(new ImportResult.SkippedEntry(entry.firstName(), entry.lastName(),
+                        entry.licenseNumber(), "RENEWAL not matched to any existing member"));
+            }
+        }
+
+        members.addAll(added);
+        return new ImportResult(updated, added, skipped);
+    }
+
+    public record ImportResult(
+            List<UpdatedEntry> updated,
+            List<Member> added,
+            List<SkippedEntry> skipped) {
+
+        public record UpdatedEntry(Member member, String oldLicenseNumber,
+                                   String newLicenseNumber, String matchMethod) {}
+
+        public record SkippedEntry(String firstName, String lastName,
+                                   String licenseNumber, String reason) {}
+    }
+
+    // ---- Private helpers ----
+
+    private Member findByMid(Map<String, Member> byMid, String mid) {
+        Member exact = byMid.get(mid);
+        if (exact != null) return exact;
+        // Numeric comparison to handle leading-zero differences (e.g. "0289679" vs "289679")
+        try {
+            long numericMid = Long.parseLong(mid);
+            for (Map.Entry<String, Member> e : byMid.entrySet()) {
+                try {
+                    if (Long.parseLong(e.getKey()) == numericMid) return e.getValue();
+                } catch (NumberFormatException ignored) {}
+            }
+        } catch (NumberFormatException ignored) {}
+        return null;
+    }
+
+    private Member buildMember(RegistrationEntry entry, int rowIndex) {
+        Member m = new Member();
+        m.setRowIndex(rowIndex);
+        m.setLicenseNumber(entry.licenseNumber());
+        m.setLicenseClass(entry.category());
+        m.setLicenseExpiry(entry.expiryDate());
+        m.setGivenName(entry.firstName());
+        m.setFamilyName(entry.lastName());
+        m.setBirthDate(entry.dateOfBirth());
+        m.setGender(normalizeGender(entry.gender()));
+        m.setActive("Yes");
+        m.setInternationalLicense(entry.memberId());
+        m.setClubName(entry.club());
+        m.setEmail(entry.email());
+        m.setLicenseCountryCode(entry.nationality());
+        m.setEmergencyContactPerson(entry.emergencyContactName());
+        m.setEmergencyContactNumber(entry.emergencyContactPhone());
+        return m;
+    }
+
+    private String normalizeGender(String gender) {
+        if (gender == null) return null;
+        return switch (gender.trim().toUpperCase()) {
+            case "MALE"   -> "Male";
+            case "FEMALE" -> "Female";
+            default       -> gender.trim();
+        };
+    }
+
+    private String trim(String value) {
+        return value == null ? "" : value.trim();
     }
 
     /**

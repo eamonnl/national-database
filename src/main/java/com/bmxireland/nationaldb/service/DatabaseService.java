@@ -1,6 +1,7 @@
 package com.bmxireland.nationaldb.service;
 
 import com.bmxireland.nationaldb.model.Member;
+import com.bmxireland.nationaldb.model.RegistrationEntry;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
@@ -167,6 +168,56 @@ public class DatabaseService {
         newWorkbook.close();
 
         log.info("Database saved with {} members to: {}", members.size(), file.getAbsolutePath());
+    }
+
+    /**
+     * Reads a Cycling Ireland registration export xlsx file and returns its rows as
+     * {@link RegistrationEntry} objects. Expects the column layout produced by the
+     * standard "RegisteredCyclistData" export (header row 0, data from row 1).
+     *
+     * @param filePath path to the registration xlsx file
+     * @return list of registration entries (header row excluded)
+     * @throws IOException if the file cannot be read
+     */
+    public List<RegistrationEntry> loadRegistrationFile(String filePath) throws IOException {
+        File file = new File(filePath);
+        if (!file.exists()) {
+            throw new FileNotFoundException("Registration file not found: " + file.getAbsolutePath());
+        }
+
+        log.info("Loading registration file from: {}", file.getAbsolutePath());
+
+        List<RegistrationEntry> entries = new ArrayList<>();
+        try (FileInputStream fis = new FileInputStream(file);
+             Workbook wb = new XSSFWorkbook(fis)) {
+
+            Sheet sheet = wb.getSheetAt(0);
+            for (int i = 1; i <= sheet.getLastRowNum(); i++) {   // row 0 is the header
+                Row row = sheet.getRow(i);
+                if (row == null || isRowEmpty(row)) continue;
+
+                entries.add(new RegistrationEntry(
+                        getCellStringValue(row.getCell(0)),   // Club
+                        getCellStringValue(row.getCell(1)),   // Registration Date
+                        getCellStringValue(row.getCell(2)),   // Expiry Date
+                        getCellStringValue(row.getCell(3)),   // New or Renewal
+                        getCellStringValue(row.getCell(4)),   // Licence Number
+                        getCellStringValue(row.getCell(5)),   // MID (stable member ID)
+                        getCellStringValue(row.getCell(7)),   // Category
+                        getCellStringValue(row.getCell(10)),  // First Name
+                        getCellStringValue(row.getCell(11)),  // Last Name
+                        getCellStringValue(row.getCell(12)),  // Email
+                        getCellStringValue(row.getCell(13)),  // DOB
+                        getCellStringValue(row.getCell(14)),  // Gender
+                        getCellStringValue(row.getCell(21)),  // Nationality
+                        getCellStringValue(row.getCell(24)),  // Emergency Contact Name
+                        getCellStringValue(row.getCell(26))   // Emergency Contact Phone
+                ));
+            }
+        }
+
+        log.info("Loaded {} registration entries", entries.size());
+        return entries;
     }
 
     /**
