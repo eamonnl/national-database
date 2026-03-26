@@ -1,6 +1,7 @@
 package com.bmxireland.nationaldb.service;
 
 import com.bmxireland.nationaldb.model.Member;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.text.similarity.LevenshteinDistance;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -102,15 +103,15 @@ public class ValidationService {
                 Member b = members.get(j);
 
                 // If both rows have different non-empty international IDs they are confirmed distinct people
-                String intA = trim(a.getInternationalLicense());
-                String intB = trim(b.getInternationalLicense());
+                String intA = StringUtils.trimToEmpty(a.getInternationalLicense());
+                String intB = StringUtils.trimToEmpty(b.getInternationalLicense());
                 if (!intA.isEmpty() && !intB.isEmpty() && !intA.equalsIgnoreCase(intB)) {
                     continue;
                 }
 
                 // DOB must be non-empty and match exactly
-                String dobA = trim(a.getBirthDate());
-                String dobB = trim(b.getBirthDate());
+                String dobA = StringUtils.trimToEmpty(a.getBirthDate());
+                String dobB = StringUtils.trimToEmpty(b.getBirthDate());
                 if (dobA.isEmpty() || !dobA.equals(dobB)) {
                     continue;
                 }
@@ -149,12 +150,8 @@ public class ValidationService {
     }
 
     private String normalizeName(String first, String second) {
-        String combined = (first != null ? first : "") + " " + (second != null ? second : "");
-        return combined.trim().toLowerCase().replaceAll("\\s+", " ");
-    }
-
-    private String trim(String value) {
-        return value == null ? "" : value.trim();
+        String combined = StringUtils.defaultString(first) + " " + StringUtils.defaultString(second);
+        return StringUtils.normalizeSpace(combined).toLowerCase();
     }
 
     private String buildMissingIdNote(String intA, String intB) {
@@ -205,6 +202,6 @@ public class ValidationService {
     }
 
     private boolean isBlankOrNone(String value) {
-        return value == null || value.isBlank() || "none".equalsIgnoreCase(value.trim());
+        return StringUtils.isBlank(value) || "none".equalsIgnoreCase(StringUtils.trim(value));
     }
 }

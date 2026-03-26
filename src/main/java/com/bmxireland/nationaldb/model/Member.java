@@ -1,5 +1,7 @@
 package com.bmxireland.nationaldb.model;
 
+import org.apache.commons.lang3.StringUtils;
+
 /**
  * Represents a member record in the BMX Ireland national database.
  * Field ordering matches the xlsx column layout.
@@ -286,12 +288,12 @@ public class Member {
      */
     public String toSummary() {
         return String.format("[%s] %s %s (%s) - %s - Club: %s",
-                licenseNumber,
-                givenName != null ? givenName : "",
-                familyName != null ? familyName : "",
-                licenseClass != null ? licenseClass : "",
-                active != null ? active : "",
-                clubName != null ? clubName : "");
+                StringUtils.defaultString(licenseNumber),
+                StringUtils.defaultString(givenName),
+                StringUtils.defaultString(familyName),
+                StringUtils.defaultString(licenseClass),
+                StringUtils.defaultString(active),
+                StringUtils.defaultString(clubName));
     }
 
     /**
@@ -333,7 +335,7 @@ public class Member {
     }
 
     private String safe(String value) {
-        return value != null ? value : "";
+        return StringUtils.defaultString(value);
     }
 
     @Override

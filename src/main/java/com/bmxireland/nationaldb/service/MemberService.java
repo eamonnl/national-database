@@ -1,6 +1,7 @@
 package com.bmxireland.nationaldb.service;
 
 import com.bmxireland.nationaldb.model.Member;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -55,10 +56,10 @@ public class MemberService {
         String lower = query.toLowerCase();
         return members.stream()
                 .filter(m -> {
-                    String lic    = m.getLicenseNumber() != null ? m.getLicenseNumber().toLowerCase() : "";
-                    String given  = m.getGivenName()     != null ? m.getGivenName().toLowerCase()     : "";
-                    String family = m.getFamilyName()    != null ? m.getFamilyName().toLowerCase()    : "";
-                    String club   = m.getClubName()      != null ? m.getClubName().toLowerCase()      : "";
+                    String lic    = StringUtils.defaultString(m.getLicenseNumber()).toLowerCase();
+                    String given  = StringUtils.defaultString(m.getGivenName()).toLowerCase();
+                    String family = StringUtils.defaultString(m.getFamilyName()).toLowerCase();
+                    String club   = StringUtils.defaultString(m.getClubName()).toLowerCase();
                     return lic.contains(lower)
                             || given.contains(lower)
                             || family.contains(lower)

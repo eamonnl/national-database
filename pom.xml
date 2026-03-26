@@ -35,6 +35,13 @@
             <version>1.12.0</version>
         </dependency>
 
+        <!-- Apache Commons Lang for string utilities -->
+        <dependency>
+            <groupId>org.apache.commons</groupId>
+            <artifactId>commons-lang3</artifactId>
+            <version>3.14.0</version>
+        </dependency>
+
         <!-- Apache POI for Excel (.xlsx) file handling -->
         <dependency>
             <groupId>org.apache.poi</groupId>

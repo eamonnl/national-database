@@ -1,6 +1,7 @@
 package com.bmxireland.nationaldb.service;
 
 import com.bmxireland.nationaldb.model.Member;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.poi.ss.usermodel.*;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.slf4j.Logger;
@@ -109,7 +110,7 @@ public class DatabaseService {
             }
 
             Member member = parseRow(row, memberIndex);
-            if (member.getLicenseNumber() != null && !member.getLicenseNumber().isBlank()) {
+            if (StringUtils.isNotBlank(member.getLicenseNumber())) {
                 members.add(member);
                 memberIndex++;
             }
