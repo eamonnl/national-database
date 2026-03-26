@@ -54,18 +54,27 @@ public class MemberService {
      * Matching is case-insensitive substring.
      */
     public List<Member> search(List<Member> members, String query) {
-        String lower = query.toLowerCase();
+        String lower           = query.toLowerCase();
+        // Normalised name matching only applies to pure-name queries (no digits).
+        // Queries like "LIC002" are identifier lookups and must not be normalised,
+        // as stripping non-alpha chars reduces "LIC002" to "lic" which is a substring of "alice".
+        boolean isNameQuery    = !query.chars().anyMatch(Character::isDigit);
+        String normalizedQuery = isNameQuery ? normalizeNameForMatch(query) : "";
         return members.stream()
                 .filter(m -> {
                     String lic    = StringUtils.defaultString(m.getLicenseNumber()).toLowerCase();
                     String given  = StringUtils.defaultString(m.getGivenName()).toLowerCase();
                     String family = StringUtils.defaultString(m.getFamilyName()).toLowerCase();
                     String club   = StringUtils.defaultString(m.getClubName()).toLowerCase();
-                    return lic.contains(lower)
-                            || given.contains(lower)
-                            || family.contains(lower)
-                            || club.contains(lower)
-                            || (given + " " + family).contains(lower);
+                    if (lic.contains(lower) || given.contains(lower) || family.contains(lower)
+                            || club.contains(lower) || (given + " " + family).contains(lower)) {
+                        return true;
+                    }
+                    if (!isNameQuery || normalizedQuery.isEmpty()) return false;
+                    String normalizedFull = normalizeNameForMatch(
+                            StringUtils.defaultString(m.getGivenName()) + " " +
+                            StringUtils.defaultString(m.getFamilyName()));
+                    return normalizedFull.contains(normalizedQuery);
                 })
                 .collect(Collectors.toList());
     }
@@ -249,15 +258,14 @@ public class MemberService {
                 // Keep lookup maps current so later entries in the same file don't re-match
                 if (entry.licenseNumber() != null) byLicense.put(entry.licenseNumber().trim(), match);
 
-            } else if ("NEW".equalsIgnoreCase(trim(entry.newOrRenewal()))) {
+            } else {
+                // No match found — add as new member regardless of NEW/RENEWAL flag.
+                // Unmatched RENEWALs are treated as new registrations; the duplicate-member
+                // validation will surface any collision with an existing row so it can be merged.
                 Member newMember = buildMember(entry, members.size() + added.size());
                 added.add(newMember);
                 if (newMember.getLicenseNumber() != null) byLicense.put(newMember.getLicenseNumber().trim(), newMember);
                 if (newMember.getInternationalLicense() != null) byMid.put(newMember.getInternationalLicense().trim(), newMember);
-
-            } else {
-                skipped.add(new ImportResult.SkippedEntry(entry.firstName(), entry.lastName(),
-                        entry.licenseNumber(), "RENEWAL not matched to any existing member"));
             }
         }
 
@@ -298,10 +306,12 @@ public class MemberService {
         Member m = new Member();
         m.setRowIndex(rowIndex);
         m.setLicenseNumber(entry.licenseNumber());
-        m.setLicenseClass(entry.category());
+        String riderCat = (entry.riderCategory() != null && !entry.riderCategory().isBlank())
+                ? entry.riderCategory() : entry.category();
+        m.setLicenseClass(mapLicenseClass(riderCat));
         m.setLicenseExpiry(entry.expiryDate());
         m.setGivenName(entry.firstName());
-        m.setFamilyName(entry.lastName());
+        m.setFamilyName(capitalizeName(entry.lastName()));
         m.setBirthDate(entry.dateOfBirth());
         m.setGender(normalizeGender(entry.gender()));
         m.setActive("Yes");
@@ -314,12 +324,57 @@ public class MemberService {
         return m;
     }
 
+    /**
+     * Capitalises each word in a name, treating spaces, hyphens, and apostrophes as
+     * word boundaries. Input case is normalised first so "SMITH", "smith", and "sMiTh"
+     * all produce "Smith". "O'BRIEN" → "O'Brien", "MAC-DONALD" → "Mac-Donald".
+     */
+    static String capitalizeName(String name) {
+        if (name == null || name.isBlank()) return name;
+        StringBuilder result = new StringBuilder(name.length());
+        boolean capitalizeNext = true;
+        for (char c : name.toLowerCase().toCharArray()) {
+            if (c == ' ' || c == '-' || c == '\'') {
+                result.append(c);
+                capitalizeNext = true;
+            } else if (capitalizeNext) {
+                result.append(Character.toUpperCase(c));
+                capitalizeNext = false;
+            } else {
+                result.append(c);
+            }
+        }
+        return result.toString();
+    }
+
+    /**
+     * Normalises a name for fuzzy matching by lowercasing and removing all
+     * non-alphabetic characters (apostrophes, hyphens, spaces, etc.).
+     * "O'Connell", "O Connell", and "OConnell" all normalise to "oconnell".
+     */
+    private static String normalizeNameForMatch(String name) {
+        if (name == null) return "";
+        return name.toLowerCase().replaceAll("[^a-z]", "");
+    }
+
+    /**
+     * Maps a Cycling Ireland rider category to "Adult" or "Youth".
+     * JUNIOR, SENIOR, M40, M50, WM40 → Adult; U* categories → Youth.
+     */
+    static String mapLicenseClass(String riderCategory) {
+        if (riderCategory == null || riderCategory.isBlank()) return null;
+        return switch (riderCategory.trim().toUpperCase()) {
+            case "JUNIOR", "SENIOR", "M40", "M50", "WM40" -> "Adult";
+            default -> riderCategory.trim().toUpperCase().matches("U\\d+") ? "Youth" : null;
+        };
+    }
+
     private String normalizeGender(String gender) {
         if (gender == null) return null;
         return switch (gender.trim().toUpperCase()) {
-            case "MALE"   -> "Male";
-            case "FEMALE" -> "Female";
-            default       -> gender.trim();
+            case "M", "MALE"   -> "M";
+            case "F", "FEMALE" -> "F";
+            default            -> gender.trim();
         };
     }
 

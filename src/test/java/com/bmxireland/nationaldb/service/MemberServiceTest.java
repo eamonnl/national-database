@@ -3,6 +3,7 @@ package com.bmxireland.nationaldb.service;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.LocalDate;
@@ -280,13 +281,14 @@ class MemberServiceTest {
 
     // ---- importRegistrationData ----
 
-    private RegistrationEntry entry(String newOrRenewal, String licenseNumber, String memberId,
+    private RegistrationEntry entry(String licenseNumber, String memberId,
                                     String firstName, String lastName, String dob, String expiry) {
         return new RegistrationEntry(
-                "Dublin BMX", "2026-01-01", expiry, newOrRenewal,
-                licenseNumber, memberId, "Adult",
+                "Dublin BMX", "2026-01-01", expiry,
+                licenseNumber, memberId, "LC_Adult",
                 firstName, lastName, "test@example.com",
-                dob, "MALE", "IRL", "Emergency Contact", "0851234567");
+                dob, "MALE", "IRL", "Emergency Contact", "0851234567",
+                "Adult");
     }
 
     private Member memberWithMid(String licenseNumber, String givenName, String familyName,
@@ -304,7 +306,7 @@ class MemberServiceTest {
     void import_matchByMid_updatesLicenseAndExpiry() {
         Member existing = memberWithMid("25U001", "Alice", "Smith", "1990-01-01", "MID-100");
         List<Member> members = new ArrayList<>(List.of(existing));
-        var entries = List.of(entry("RENEWAL", "26U001", "MID-100", "Alice", "Smith", "1990-01-01", "2026-12-31"));
+        var entries = List.of(entry("26U001", "MID-100", "Alice", "Smith", "1990-01-01", "2026-12-31"));
 
         var result = memberService.importRegistrationData(members, entries);
 
@@ -321,7 +323,7 @@ class MemberServiceTest {
     void import_matchByLicenseNumber_updatesExpiry() {
         Member existing = memberWithMid("26U001", "Alice", "Smith", "1990-01-01", null);
         List<Member> members = new ArrayList<>(List.of(existing));
-        var entries = List.of(entry("RENEWAL", "26U001", "MID-200", "Alice", "Smith", "1990-01-01", "2026-12-31"));
+        var entries = List.of(entry("26U001", "MID-200", "Alice", "Smith", "1990-01-01", "2026-12-31"));
 
         var result = memberService.importRegistrationData(members, entries);
 
@@ -336,7 +338,7 @@ class MemberServiceTest {
         Member existing = memberWithMid("25U999", "Alice", "Smith", "1990-01-01", null);
         List<Member> members = new ArrayList<>(List.of(existing));
         // Different licence number, no MID — falls through to name+DOB
-        var entries = List.of(entry("RENEWAL", "26U001", "MID-300", "Alice", "Smith", "1990-01-01", "2026-12-31"));
+        var entries = List.of(entry("26U001", "MID-300", "Alice", "Smith", "1990-01-01", "2026-12-31"));
 
         var result = memberService.importRegistrationData(members, entries);
 
@@ -350,7 +352,7 @@ class MemberServiceTest {
     void import_midWithLeadingZeros_matchesNumerically() {
         Member existing = memberWithMid("25U001", "Alice", "Smith", "1990-01-01", "289679");
         List<Member> members = new ArrayList<>(List.of(existing));
-        var entries = List.of(entry("RENEWAL", "26U001", "0289679", "Alice", "Smith", "1990-01-01", "2026-12-31"));
+        var entries = List.of(entry("26U001", "0289679", "Alice", "Smith", "1990-01-01", "2026-12-31"));
 
         var result = memberService.importRegistrationData(members, entries);
 
@@ -361,7 +363,7 @@ class MemberServiceTest {
     @Test
     void import_newEntry_noMatch_addsMember() {
         List<Member> members = new ArrayList<>();
-        var entries = List.of(entry("NEW", "26U001", "MID-400", "Bob", "Jones", "2000-05-10", "2026-12-31"));
+        var entries = List.of(entry("26U001", "MID-400", "Bob", "Jones", "2000-05-10", "2026-12-31"));
 
         var result = memberService.importRegistrationData(members, entries);
 
@@ -374,21 +376,21 @@ class MemberServiceTest {
         assertEquals("Jones", added.getFamilyName());
         assertEquals("26U001", added.getLicenseNumber());
         assertEquals("MID-400", added.getInternationalLicense());
-        assertEquals("Male", added.getGender());
+        assertEquals("M", added.getGender());
         assertEquals("Yes", added.getActive());
     }
 
     @Test
-    void import_renewalNoMatch_isSkipped() {
+    void import_renewalNoMatch_isAddedAsNew() {
         List<Member> members = new ArrayList<>();
-        var entries = List.of(entry("RENEWAL", "26U001", "MID-500", "Unknown", "Person", "1985-03-15", "2026-12-31"));
+        var entries = List.of(entry("26U001", "MID-500", "Unknown", "Person", "1985-03-15", "2026-12-31"));
 
         var result = memberService.importRegistrationData(members, entries);
 
         assertEquals(0, result.updated().size());
-        assertEquals(0, result.added().size());
-        assertEquals(1, result.skipped().size());
-        assertTrue(result.skipped().get(0).reason().contains("RENEWAL not matched"));
+        assertEquals(1, result.added().size());
+        assertEquals(0, result.skipped().size());
+        assertEquals("Unknown", members.get(0).getGivenName());
     }
 
     @Test
@@ -397,7 +399,7 @@ class MemberServiceTest {
         Member a = memberWithMid("25U001", "John", "Murphy", "2000-05-01", null);
         Member b = memberWithMid("25U002", "John", "Murphy", "2000-05-01", null);
         List<Member> members = new ArrayList<>(List.of(a, b));
-        var entries = List.of(entry("RENEWAL", "26U999", null, "John", "Murphy", "2000-05-01", "2026-12-31"));
+        var entries = List.of(entry("26U999", null, "John", "Murphy", "2000-05-01", "2026-12-31"));
 
         var result = memberService.importRegistrationData(members, entries);
 
@@ -407,10 +409,97 @@ class MemberServiceTest {
     }
 
     @Test
+    void import_apostropheInDbName_matchesQueryWithoutApostrophe() {
+        Member existing = memberWithMid("25U001", "Jayden", "O'Connell", "2010-03-15", null);
+        List<Member> members = new ArrayList<>(List.of(existing));
+        // Registration file has "O Connell" (space instead of apostrophe)
+        var entries = List.of(entry("26U001", "MID-600", "Jayden", "O Connell", "2010-03-15", "2026-12-31"));
+
+        var result = memberService.importRegistrationData(members, entries);
+
+        assertEquals(1, result.updated().size());
+        assertEquals("26U001", existing.getLicenseNumber());
+    }
+
+    @Test
+    void search_apostropheVariantsMatch() {
+        Member m = new Member();
+        m.setGivenName("Jayden");
+        m.setFamilyName("O'Connell");
+
+        // "O Connell" (space) should find "O'Connell" (apostrophe)
+        assertFalse(memberService.search(List.of(m), "Jayden O Connell").isEmpty());
+        // All-lowercase should also work
+        assertFalse(memberService.search(List.of(m), "jayden oconnell").isEmpty());
+    }
+
+    @Test
+    void mapLicenseClass_adultCategories_returnAdult() {
+        for (String cat : List.of("SENIOR", "JUNIOR", "M40", "M50", "WM40")) {
+            assertEquals("Adult", MemberService.mapLicenseClass(cat), "Expected Adult for: " + cat);
+        }
+    }
+
+    @Test
+    void mapLicenseClass_youthCategories_returnYouth() {
+        for (String cat : List.of("U8", "U10", "U12", "U14", "U16", "U18")) {
+            assertEquals("Youth", MemberService.mapLicenseClass(cat), "Expected Youth for: " + cat);
+        }
+    }
+
+    @Test
+    void mapLicenseClass_unknown_returnsNull() {
+        assertNull(MemberService.mapLicenseClass("UNKNOWN"));
+        assertNull(MemberService.mapLicenseClass(null));
+    }
+
+    @Test
+    void import_familyName_isCapitalized() {
+        List<Member> members = new ArrayList<>();
+        var entries = List.of(entry("26U001", "MID-800", "Test", "MURPHY", "2010-01-01", "2026-12-31"));
+
+        memberService.importRegistrationData(members, entries);
+
+        assertEquals("Murphy", members.get(0).getFamilyName());
+    }
+
+    // ---- capitalizeName ----
+
+    @Test
+    void capitalizeName_allCaps_isLoweredAndCapitalized() {
+        assertEquals("Smith", MemberService.capitalizeName("SMITH"));
+    }
+
+    @Test
+    void capitalizeName_allLower_isCapitalized() {
+        assertEquals("Smith", MemberService.capitalizeName("smith"));
+    }
+
+    @Test
+    void capitalizeName_apostrophe_capitalizesBothParts() {
+        assertEquals("O'Brien", MemberService.capitalizeName("O'BRIEN"));
+    }
+
+    @Test
+    void capitalizeName_hyphen_capitalizesBothParts() {
+        assertEquals("Mac-Donald", MemberService.capitalizeName("MAC-DONALD"));
+    }
+
+    @Test
+    void capitalizeName_multiWord_capitalizesEachWord() {
+        assertEquals("O Connell", MemberService.capitalizeName("O CONNELL"));
+    }
+
+    @Test
+    void capitalizeName_null_returnsNull() {
+        assertNull(MemberService.capitalizeName(null));
+    }
+
+    @Test
     void import_doesNotOverwriteExistingMid() {
         Member existing = memberWithMid("25U001", "Alice", "Smith", "1990-01-01", "EXISTING-MID");
         List<Member> members = new ArrayList<>(List.of(existing));
-        var entries = List.of(entry("RENEWAL", "26U001", "DIFFERENT-MID", "Alice", "Smith", "1990-01-01", "2026-12-31"));
+        var entries = List.of(entry("26U001", "DIFFERENT-MID", "Alice", "Smith", "1990-01-01", "2026-12-31"));
 
         memberService.importRegistrationData(members, entries);
 

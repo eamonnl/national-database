@@ -488,9 +488,9 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
 
     private void saveDatabase() {
         try {
-            databaseService.saveDatabase(members);
+            String savedPath = databaseService.saveDatabase(members);
             unsavedChanges = false;
-            System.out.println("\nDatabase saved successfully. A backup of the previous version was also created.");
+            System.out.println("\nDatabase saved to: " + savedPath);
         } catch (IOException e) {
             System.err.println("\nERROR: Could not save database: " + e.getMessage());
             log.error("Failed to save database", e);

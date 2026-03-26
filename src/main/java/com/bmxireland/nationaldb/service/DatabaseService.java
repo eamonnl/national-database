@@ -11,12 +11,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.*;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -127,16 +125,11 @@ public class DatabaseService {
      * @param members the list of members to write
      * @throws IOException if the file cannot be written
      */
-    public void saveDatabase(List<Member> members) throws IOException {
-        File file = new File(databaseFilePath);
-
-        // Create a backup before writing
-        if (file.exists()) {
-            String backupName = databaseFilePath.replace(".xlsx",
-                    "_backup_" + LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss")) + ".xlsx");
-            Files.copy(file.toPath(), Path.of(backupName), StandardCopyOption.REPLACE_EXISTING);
-            log.info("Backup created: {}", backupName);
-        }
+    public String saveDatabase(List<Member> members) throws IOException {
+        // Write to a new timestamped file, leaving the original untouched
+        String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+        String outputPath = databaseFilePath.replace(".xlsx", "_" + timestamp + ".xlsx");
+        File outputFile = new File(outputPath);
 
         Workbook newWorkbook = new XSSFWorkbook();
         Sheet newSheet = newWorkbook.createSheet("Members");
@@ -154,20 +147,24 @@ public class DatabaseService {
         copyRow(columnHeaderRow, newColumnHeader);
         currentRow++;
 
-        // Write member data rows
-        for (Member member : members) {
+        // Write member data rows sorted by family name
+        List<Member> sorted = members.stream()
+                .sorted(Comparator.comparing(
+                        m -> StringUtils.defaultString(m.getFamilyName()).toLowerCase()))
+                .toList();
+        for (Member member : sorted) {
             Row newRow = newSheet.createRow(currentRow);
             writeMemberToRow(member, newRow);
             currentRow++;
         }
 
-        // Write to file
-        try (FileOutputStream fos = new FileOutputStream(file)) {
+        try (FileOutputStream fos = new FileOutputStream(outputFile)) {
             newWorkbook.write(fos);
         }
         newWorkbook.close();
 
-        log.info("Database saved with {} members to: {}", members.size(), file.getAbsolutePath());
+        log.info("Database saved with {} members to: {}", members.size(), outputFile.getAbsolutePath());
+        return outputFile.getAbsolutePath();
     }
 
     /**
@@ -200,7 +197,6 @@ public class DatabaseService {
                         getCellStringValue(row.getCell(0)),   // Club
                         getCellStringValue(row.getCell(1)),   // Registration Date
                         getCellStringValue(row.getCell(2)),   // Expiry Date
-                        getCellStringValue(row.getCell(3)),   // New or Renewal
                         getCellStringValue(row.getCell(4)),   // Licence Number
                         getCellStringValue(row.getCell(5)),   // MID (stable member ID)
                         getCellStringValue(row.getCell(7)),   // Category
@@ -211,7 +207,8 @@ public class DatabaseService {
                         getCellStringValue(row.getCell(14)),  // Gender
                         getCellStringValue(row.getCell(21)),  // Nationality
                         getCellStringValue(row.getCell(24)),  // Emergency Contact Name
-                        getCellStringValue(row.getCell(26))   // Emergency Contact Phone
+                        getCellStringValue(row.getCell(26)),  // Emergency Contact Phone
+                        getCellStringValue(row.getCell(8))    // Rider Category (e.g. U8, SENIOR)
                 ));
             }
         }
@@ -362,7 +359,7 @@ public class DatabaseService {
         setCellValue(row, 3, m.getGivenName());
         setCellValue(row, 4, m.getFamilyName());
         setCellValue(row, 5, m.getBirthDate());
-        setCellValue(row, 6, m.getGender());
+        setCellValue(row, 6, normalizeGenderCode(m.getGender()));
         setCellValue(row, 7, m.getActive());
         setCellValue(row, 8, m.getPlate20());
         setCellValue(row, 9, m.getPlate24());
@@ -414,7 +411,8 @@ public class DatabaseService {
         return switch (cell.getCellType()) {
             case STRING -> {
                 String val = cell.getStringCellValue();
-                yield (val != null && !val.isBlank()) ? val.trim() : null;
+                if (val == null || val.isBlank() || val.trim().equalsIgnoreCase("None")) yield null;
+                yield val.trim();
             }
             case NUMERIC -> {
                 if (DateUtil.isCellDateFormatted(cell)) {
@@ -435,6 +433,15 @@ public class DatabaseService {
     private void setCellValue(Row row, int col, String value) {
         Cell cell = row.createCell(col);
         cell.setCellValue(value != null ? value : "");
+    }
+
+    private String normalizeGenderCode(String gender) {
+        if (gender == null) return null;
+        return switch (gender.trim().toUpperCase()) {
+            case "M", "MALE"   -> "M";
+            case "F", "FEMALE" -> "F";
+            default            -> gender.trim();
+        };
     }
 
     private boolean isRowEmpty(Row row) {

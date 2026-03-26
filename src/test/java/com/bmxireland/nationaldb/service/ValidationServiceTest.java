@@ -173,8 +173,92 @@ class ValidationServiceTest {
         assertEquals(1, issues.size());
     }
 
+    // ---- validateTransponderFormats ----
+
+    @Test
+    void transponder_validFormat_noIssue() {
+        Member m = member("25U001", "Alice", "Smith", "1990-01-01", null, null, "2025-12-31");
+        m.setTransponder20("AB-12345");
+        assertTrue(validationService.validateTransponderFormats(List.of(m)).isEmpty());
+    }
+
+    @Test
+    void transponder_missingHyphen_flagged() {
+        Member m = member("25U001", "Alice", "Smith", "1990-01-01", null, null, "2025-12-31");
+        m.setTransponder20("AB12345");
+        assertEquals(1, validationService.validateTransponderFormats(List.of(m)).size());
+    }
+
+    @Test
+    void transponder_lowercaseLetters_flagged() {
+        Member m = member("25U001", "Alice", "Smith", "1990-01-01", null, null, "2025-12-31");
+        m.setTransponder20("ab-12345");
+        assertEquals(1, validationService.validateTransponderFormats(List.of(m)).size());
+    }
+
+    @Test
+    void transponder_wrongDigitCount_flagged() {
+        Member m = member("25U001", "Alice", "Smith", "1990-01-01", null, null, "2025-12-31");
+        m.setTransponder20("AB-1234");
+        assertEquals(1, validationService.validateTransponderFormats(List.of(m)).size());
+    }
+
+    @Test
+    void transponder_blank_ignored() {
+        Member m = member("25U001", "Alice", "Smith", "1990-01-01", null, null, "2025-12-31");
+        m.setTransponder20(null);
+        assertTrue(validationService.validateTransponderFormats(List.of(m)).isEmpty());
+    }
+
+    @Test
+    void transponder_allFourFields_checked() {
+        Member m = member("25U001", "Alice", "Smith", "1990-01-01", null, null, "2025-12-31");
+        m.setTransponder20("BAD");
+        m.setTransponder24("BAD");
+        m.setTransponderRetro("BAD");
+        m.setTransponderOpen("BAD");
+        assertEquals(4, validationService.validateTransponderFormats(List.of(m)).size());
+    }
+
     @Test
     void emptyMemberList_producesNoIssues() {
         assertTrue(validationService.validateAll(List.of()).isEmpty());
+    }
+
+    // ---- validateLicenseExpiryMatchesLicenseYear ----
+
+    @Test
+    void licenseExpiry_correctEndOfYear_noIssue() {
+        Member m = member("23U001", "Alice", "Smith", "1990-01-01", null, null, "2023-12-31");
+        assertTrue(validationService.validateLicenseExpiryMatchesLicenseYear(List.of(m)).isEmpty());
+    }
+
+    @Test
+    void licenseExpiry_wrongYear_flagged() {
+        Member m = member("23U001", "Alice", "Smith", "1990-01-01", null, null, "2024-12-31");
+        var issues = validationService.validateLicenseExpiryMatchesLicenseYear(List.of(m));
+        assertEquals(1, issues.size());
+        assertEquals("LICENSE EXPIRY MISMATCH", issues.get(0).category());
+    }
+
+    @Test
+    void licenseExpiry_missingExpiry_flagged() {
+        Member m = member("25U001", "Bob", "Jones", "2000-01-01", null, null, null);
+        var issues = validationService.validateLicenseExpiryMatchesLicenseYear(List.of(m));
+        assertEquals(1, issues.size());
+    }
+
+    @Test
+    void licenseExpiry_noYearPrefix_ignored() {
+        // Licence not starting with two digits — not checked
+        Member m = member("IRL001", "Bob", "Jones", "2000-01-01", null, null, "2099-12-31");
+        assertTrue(validationService.validateLicenseExpiryMatchesLicenseYear(List.of(m)).isEmpty());
+    }
+
+    @Test
+    void licenseExpiry_allDigits_ignored() {
+        // Three-digit-only prefix doesn't match the pattern (char 2 is also a digit)
+        Member m = member("123456", "Bob", "Jones", "2000-01-01", null, null, "2023-12-31");
+        assertTrue(validationService.validateLicenseExpiryMatchesLicenseYear(List.of(m)).isEmpty());
     }
 }

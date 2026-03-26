@@ -44,6 +44,8 @@ public class ValidationService {
         issues.addAll(validateNoDuplicateRaceNumbers(members));
         issues.addAll(validateNoDuplicateTransponderNumbers(members));
         issues.addAll(validateNoPossibleDuplicateMembers(members));
+        issues.addAll(validateLicenseExpiryMatchesLicenseYear(members));
+        issues.addAll(validateTransponderFormats(members));
 
         if (issues.isEmpty()) {
             log.info("Validation passed: no issues found.");
@@ -130,6 +132,70 @@ public class ValidationService {
         }
 
         return issues;
+    }
+
+    /**
+     * Validates that members whose licence number begins with a two-digit year prefix
+     * (e.g. "23U", "24U") have a licence expiry of 31 December of that year.
+     * The prefix is considered a year indicator when the licence starts with two digits
+     * followed by at least one non-digit character.
+     */
+    public List<ValidationIssue> validateLicenseExpiryMatchesLicenseYear(List<Member> members) {
+        List<ValidationIssue> issues = new ArrayList<>();
+
+        for (Member m : members) {
+            String licence = StringUtils.trimToEmpty(m.getLicenseNumber());
+            if (licence.length() < 3) continue;
+
+            // Match a two-digit year prefix followed by a non-digit (e.g. "23U", "24S")
+            if (!Character.isDigit(licence.charAt(0)) || !Character.isDigit(licence.charAt(1))
+                    || Character.isDigit(licence.charAt(2))) continue;
+
+            int year = 2000 + Integer.parseInt(licence.substring(0, 2));
+            String expectedExpiry = year + "-12-31";
+            String actualExpiry = StringUtils.trimToEmpty(m.getLicenseExpiry());
+
+            if (!expectedExpiry.equals(actualExpiry)) {
+                issues.add(new ValidationIssue(
+                        "LICENSE EXPIRY MISMATCH",
+                        String.format("Licence '%s' implies expiry %s but expiry is '%s'",
+                                licence, expectedExpiry, actualExpiry.isEmpty() ? "(missing)" : actualExpiry),
+                        List.of(m)));
+            }
+        }
+
+        return issues;
+    }
+
+    private static final java.util.regex.Pattern TRANSPONDER_FORMAT = java.util.regex.Pattern.compile("^[A-Z]{2}-\\d{5}$");
+
+    /**
+     * Validates that all non-blank transponder numbers match the format "AA-NNNNN"
+     * (two uppercase letters, a hyphen, five digits).
+     */
+    public List<ValidationIssue> validateTransponderFormats(List<Member> members) {
+        List<ValidationIssue> issues = new ArrayList<>();
+
+        validateTransponderField(members, "Transponder 20",    Member::getTransponder20,    issues);
+        validateTransponderField(members, "Transponder 24",    Member::getTransponder24,    issues);
+        validateTransponderField(members, "Transponder Retro", Member::getTransponderRetro, issues);
+        validateTransponderField(members, "Transponder Open",  Member::getTransponderOpen,  issues);
+
+        return issues;
+    }
+
+    private void validateTransponderField(List<Member> members, String fieldName,
+                                          FieldExtractor extractor, List<ValidationIssue> issues) {
+        for (Member m : members) {
+            String value = extractor.extract(m);
+            if (isBlankOrNone(value)) continue;
+            if (!TRANSPONDER_FORMAT.matcher(value.trim()).matches()) {
+                issues.add(new ValidationIssue(
+                        "INVALID TRANSPONDER FORMAT",
+                        String.format("%s value '%s' does not match required format AA-NNNNN", fieldName, value.trim()),
+                        List.of(m)));
+            }
+        }
     }
 
     // ---- Private helpers ----

@@ -8,10 +8,9 @@ public record RegistrationEntry(
         String club,
         String registrationDate,
         String expiryDate,
-        String newOrRenewal,    // "NEW" or "RENEWAL"
         String licenseNumber,
         String memberId,        // MID — the stable Cycling Ireland identifier (internationalLicense)
-        String category,
+        String category,        // col 7: e.g. "LC_U10", "FC_U14", "CS"
         String firstName,
         String lastName,
         String email,
@@ -19,5 +18,6 @@ public record RegistrationEntry(
         String gender,
         String nationality,
         String emergencyContactName,
-        String emergencyContactPhone
+        String emergencyContactPhone,
+        String riderCategory    // col 8: e.g. "U8", "U12", "SENIOR", "M30"
 ) {}
