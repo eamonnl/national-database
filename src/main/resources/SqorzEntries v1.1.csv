@@ -1,0 +1,8 @@
+****************,,,,,,,,,,,,,,,,,,,,,,,
+Sqorz Entries File,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,
+Required,Optional,Optional,Optional,Required,Required,Required,Required,Optional,Optional,Optional,Required,Required,Required,Optional,Optional,Required,Required,Required,Optional,Optional,Optional,Optional,Optional
+,,YYYY-MM-DD,,,,YYYY-MM-DD,M/F,,,AA-99999,,,,,,,,,,,,,
+****************,,,,,,,,,,,,,,,,,,,,,,,
+License Number,License Class,License Expiry,License Country Code,Family Name,Given Name,Birth Date,Gender,Plate,Transponder 20,Transponder 24,Club ID,Club Name,Club Short Name,Club State,Club Country,Class Name 1,Class Plate 1,Class Transponder 1,Class Name 2,Class Plate 2,Class Transponder 2,Class Hire Transponder 1,Class Hire Transponder 2
+123457,OPEN,31/12/2019,NZL,Smith,Jane,30/1/2000,F,12N,AB-12345,XY-98765,24645,Awesome BMX Club,AWS,NHB,NZL,8 Boys,20,AB-12345,,,,,

@@ -412,7 +412,7 @@ public class DatabaseService {
         setCellValue(row, 27, normalizePhoneNumber(m.getEmergencyContactNumber()));
     }
 
-    private String getCellStringValue(Cell cell) {
+    String getCellStringValue(Cell cell) {
         if (cell == null)
             return null;
         return switch (cell.getCellType()) {

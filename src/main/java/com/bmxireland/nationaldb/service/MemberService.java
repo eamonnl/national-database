@@ -423,7 +423,7 @@ public class MemberService {
      * Normalises non-standard separator characters in a name to a standard apostrophe,
      * so that backtick, double-quote, and curly-quote variants are handled uniformly.
      */
-    private static String normalizeSeparators(String name) {
+    static String normalizeSeparators(String name) {
         if (name == null) return null;
         return name.replaceAll("[`\"\u201C\u201D\u2018\u2019]", "'");
     }
