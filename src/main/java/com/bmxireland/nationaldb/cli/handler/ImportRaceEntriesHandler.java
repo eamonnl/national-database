@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import com.bmxireland.nationaldb.cli.InputUtils;
 import com.bmxireland.nationaldb.cli.MenuHandler;
 import com.bmxireland.nationaldb.cli.SessionState;
 import com.bmxireland.nationaldb.model.BookingEntry;
@@ -43,7 +44,7 @@ public class ImportRaceEntriesHandler implements MenuHandler {
     public void handle(Scanner scanner) {
         System.out.println("\n═══════════════ Import Race Entries (EventMaster) ═══════════════");
         System.out.print("  Enter path to EventMaster BookingDetails xlsx file: ");
-        String filePath = scanner.nextLine().trim();
+        String filePath = InputUtils.normalizeFilePath(scanner.nextLine());
         if (filePath.isEmpty()) {
             System.out.println("Cancelled.");
             return;
