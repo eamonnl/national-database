@@ -299,14 +299,13 @@ public class MemberService {
                     match.setFamilyName(capitalizeName(normalizeSeparators(entry.lastName())));
                 }
 
-                // Always sync the UCIID from CI — covers blank records and cases where
-                // CI has corrected a previously missing or misrecorded international ID.
-                if (entry.memberId() != null && !entry.memberId().isBlank()) {
-                    String incomingMid = entry.memberId().trim();
-                    if (!incomingMid.equals(StringUtils.defaultString(match.getInternationalLicense()).trim())) {
-                        match.setInternationalLicense(incomingMid);
-                        byMid.put(incomingMid, match);
-                    }
+                // Populate UCIID only when the DB record has none — heals records that were
+                // added without an international ID. An existing value is never overwritten
+                // because CI data is not guaranteed to be more accurate than what is stored.
+                if ((match.getInternationalLicense() == null || match.getInternationalLicense().isBlank())
+                        && entry.memberId() != null && !entry.memberId().isBlank()) {
+                    match.setInternationalLicense(entry.memberId().trim());
+                    byMid.put(entry.memberId().trim(), match);
                 }
                 updated.add(new ImportResult.UpdatedEntry(match, oldLicense, entry.licenseNumber(), matchMethod));
 
