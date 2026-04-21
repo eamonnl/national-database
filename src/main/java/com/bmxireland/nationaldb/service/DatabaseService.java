@@ -10,7 +10,10 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.text.similarity.LevenshteinDistance;
@@ -25,9 +28,11 @@ import org.apache.poi.xssf.usermodel.XSSFCellStyle;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import com.bmxireland.nationaldb.config.RegistrationFormatConfig;
 import com.bmxireland.nationaldb.model.Member;
 import com.bmxireland.nationaldb.model.RegistrationEntry;
 import com.google.i18n.phonenumbers.NumberParseException;
@@ -47,6 +52,9 @@ public class DatabaseService {
 
     @Value("${database.file.path:MemberDatabase.xlsx}")
     private String databaseFilePath;
+
+    @Autowired
+    private RegistrationFormatConfig registrationFormat;
 
     private static final String FALLBACK_CLUB = "Other";
     private static final LevenshteinDistance LEVENSHTEIN = LevenshteinDistance.getDefaultInstance();
@@ -217,34 +225,91 @@ public class DatabaseService {
         try (FileInputStream fis = new FileInputStream(file);
                 Workbook wb = new XSSFWorkbook(fis)) {
 
+            if (wb.getNumberOfSheets() != 1) {
+                throw new IllegalArgumentException(
+                        "Registration file must contain exactly one sheet, but found " + wb.getNumberOfSheets());
+            }
+
             Sheet sheet = wb.getSheetAt(0);
-            for (int i = 1; i <= sheet.getLastRowNum(); i++) { // row 0 is the header
+
+            Map<String, Integer> colIndex = buildHeaderIndex(sheet.getRow(0));
+            validateRegistrationHeaders(colIndex);
+
+            for (int i = 1; i <= sheet.getLastRowNum(); i++) {
                 Row row = sheet.getRow(i);
                 if (row == null || isRowEmpty(row))
                     continue;
 
                 entries.add(new RegistrationEntry(
-                        getCellStringValue(row.getCell(0)), // Club
-                        getCellStringValue(row.getCell(1)), // Registration Date
-                        getCellStringValue(row.getCell(2)), // Expiry Date
-                        getCellStringValue(row.getCell(4)), // Licence Number
-                        getCellStringValue(row.getCell(5)), // MID (stable member ID)
-                        getCellStringValue(row.getCell(7)), // Category
-                        getCellStringValue(row.getCell(10)), // First Name
-                        getCellStringValue(row.getCell(11)), // Last Name
-                        getCellStringValue(row.getCell(12)), // Email
-                        getCellStringValue(row.getCell(13)), // DOB
-                        getCellStringValue(row.getCell(14)), // Gender
-                        getCellStringValue(row.getCell(21)), // Nationality
-                        getCellStringValue(row.getCell(24)), // Emergency Contact Name
-                        getCellStringValue(row.getCell(26)), // Emergency Contact Phone
-                        getCellStringValue(row.getCell(8)) // Rider Category (e.g. U8, SENIOR)
+                        col(row, colIndex, registrationFormat.getClub()),
+                        col(row, colIndex, registrationFormat.getRegistrationDate()),
+                        col(row, colIndex, registrationFormat.getExpiryDate()),
+                        col(row, colIndex, registrationFormat.getLicenseNumber()),
+                        col(row, colIndex, registrationFormat.getMemberId()),
+                        col(row, colIndex, registrationFormat.getCategory()),
+                        col(row, colIndex, registrationFormat.getFirstName()),
+                        col(row, colIndex, registrationFormat.getLastName()),
+                        col(row, colIndex, registrationFormat.getEmail()),
+                        col(row, colIndex, registrationFormat.getDateOfBirth()),
+                        col(row, colIndex, registrationFormat.getGender()),
+                        col(row, colIndex, registrationFormat.getNationality()),
+                        col(row, colIndex, registrationFormat.getEmergencyContactName()),
+                        col(row, colIndex, registrationFormat.getEmergencyContactPhone()),
+                        col(row, colIndex, registrationFormat.getRiderCategory())
                 ));
             }
         }
 
         log.info("Loaded {} registration entries", entries.size());
         return entries;
+    }
+
+    /** Builds a case-insensitive header-name → column-index map from the header row. */
+    private Map<String, Integer> buildHeaderIndex(Row headerRow) {
+        Map<String, Integer> index = new HashMap<>();
+        if (headerRow == null) return index;
+        for (int c = 0; c <= headerRow.getLastCellNum(); c++) {
+            String header = getCellStringValue(headerRow.getCell(c));
+            if (header != null && !header.isBlank()) {
+                index.put(header.trim().toLowerCase(), c);
+            }
+        }
+        return index;
+    }
+
+    /** Checks every configured column header is present; throws with the full list of missing ones. */
+    private void validateRegistrationHeaders(Map<String, Integer> colIndex) {
+        List<String> missing = List.of(
+                registrationFormat.getClub(),
+                registrationFormat.getRegistrationDate(),
+                registrationFormat.getExpiryDate(),
+                registrationFormat.getLicenseNumber(),
+                registrationFormat.getMemberId(),
+                registrationFormat.getCategory(),
+                registrationFormat.getRiderCategory(),
+                registrationFormat.getFirstName(),
+                registrationFormat.getLastName(),
+                registrationFormat.getEmail(),
+                registrationFormat.getDateOfBirth(),
+                registrationFormat.getGender(),
+                registrationFormat.getNationality(),
+                registrationFormat.getEmergencyContactName(),
+                registrationFormat.getEmergencyContactPhone()
+        ).stream()
+                .filter(h -> !colIndex.containsKey(h.trim().toLowerCase()))
+                .collect(Collectors.toList());
+
+        if (!missing.isEmpty()) {
+            throw new IllegalArgumentException(
+                    "Registration file is missing expected column(s): " + missing + ". " +
+                    "If the column names have changed, update ci-registration.format in application.yml.");
+        }
+    }
+
+    /** Reads a cell value by configured header name. */
+    private String col(Row row, Map<String, Integer> colIndex, String headerName) {
+        Integer idx = colIndex.get(headerName.trim().toLowerCase());
+        return idx == null ? null : getCellStringValue(row.getCell(idx));
     }
 
     /**

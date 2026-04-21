@@ -1,0 +1,24 @@
+database:
+  file:
+    path: MemberDatabase.xlsx
+
+ci-registration:
+  format:
+    # Each value is the exact column header text in the Cycling Ireland export file.
+    # Update these if CI changes column names in a future export without modifying code.
+    # Header matching is case-insensitive and ignores leading/trailing whitespace.
+    club: "Club"
+    registration-date: "Registration Date"
+    expiry-date: "Expiry Date"
+    license-number: "Licence Number"
+    member-id: "MID"
+    category: "Category"
+    rider-category: "Rider Category"
+    first-name: "First Name"
+    last-name: "Last Name"
+    email: "Email"
+    date-of-birth: "DOB"
+    gender: "Gender"
+    nationality: "Nationality"
+    emergency-contact-name: "Emergency Contact Name"
+    emergency-contact-phone: "Emergency Contact Phone"

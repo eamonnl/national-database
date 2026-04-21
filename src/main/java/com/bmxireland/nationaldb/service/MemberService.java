@@ -193,13 +193,17 @@ public class MemberService {
      * Matching is attempted in priority order:
      *   1. By MID (internationalLicense) — most reliable, survives annual license changes
      *   2. By current licenseNumber — exact match
-     *   3. By full name + DOB — fallback for renewals where MID and license differ
+     *   3. By normalised full name + DOB — catches members previously added without a MID,
+     *      and members whose licence number changed. Name matching strips all non-alpha
+     *      characters and ignores case, so differences in whitespace, capitalisation, and
+     *      punctuation (e.g. "O'Brien" vs "Obrien") are tolerated. DOB is compared with a
+     *      ±5-day window to absorb common data-entry errors.
      *
-     * On match: licenseNumber, licenseExpiry, and active are updated. internationalLicense
-     * is set if it was previously empty (fixing the root cause of duplicate rows).
+     * On match: licenseNumber, licenseExpiry, and active are updated. If the matched DB
+     * record had no internationalLicense (MID) set, it is populated from the import entry
+     * so that future imports can match by MID instead of falling back to name+DOB.
      *
-     * On no match for a NEW entry: a new member row is added.
-     * On no match for a RENEWAL entry: the row is skipped and logged.
+     * On no match: a new member row is added.
      */
     public ImportResult importRegistrationData(List<Member> members, List<RegistrationEntry> entries) {
         List<ImportResult.UpdatedEntry> updated = new ArrayList<>();
@@ -234,10 +238,19 @@ public class MemberService {
                 if (match != null) matchMethod = "licence number";
             }
 
-            // 3. Fallback: name + DOB (for renewals where licence changed and MID was missing)
+            // 3. Fallback: normalised name equality + DOB.
+            // Targets members who were added to the DB without a MID, or whose licence
+            // number changed since they were last imported. Uses equality (not substring)
+            // on the normalised name so "Smithson" never accidentally matches "Smith".
             if (match == null) {
-                String fullName = trim(entry.firstName()) + " " + trim(entry.lastName());
-                List<Member> nameMatches = search(members, fullName.trim());
+                String normalizedEntryName = normalizeNameForMatch(
+                        trim(entry.firstName()) + " " + trim(entry.lastName()));
+                List<Member> nameMatches = members.stream()
+                        .filter(m -> normalizeNameForMatch(
+                                StringUtils.defaultString(m.getGivenName()) + " " +
+                                StringUtils.defaultString(m.getFamilyName()))
+                                .equals(normalizedEntryName))
+                        .collect(Collectors.toList());
                 List<Member> dobMatches = nameMatches.stream()
                         .filter(m -> dobsMatch(trim(entry.dateOfBirth()), trim(m.getBirthDate())))
                         .collect(Collectors.toList());
@@ -257,6 +270,13 @@ public class MemberService {
                 match.setLicenseNumber(entry.licenseNumber());
                 match.setLicenseExpiry(entry.expiryDate());
                 match.setActive("Yes");
+                // Populate MID if the DB record had none — heals old records so future
+                // imports can match by MID rather than falling back to name+DOB again.
+                if ((match.getInternationalLicense() == null || match.getInternationalLicense().isBlank())
+                        && entry.memberId() != null && !entry.memberId().isBlank()) {
+                    match.setInternationalLicense(entry.memberId().trim());
+                    byMid.put(entry.memberId().trim(), match);
+                }
                 updated.add(new ImportResult.UpdatedEntry(match, oldLicense, entry.licenseNumber(), matchMethod));
 
                 // Keep lookup maps current so later entries in the same file don't re-match

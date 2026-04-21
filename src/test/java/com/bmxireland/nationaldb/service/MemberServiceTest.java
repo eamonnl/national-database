@@ -359,8 +359,8 @@ class MemberServiceTest {
 
         assertEquals(1, result.updated().size());
         assertEquals("licence number", result.updated().get(0).matchMethod());
-        // MID is not written to International License
-        assertNull(existing.getInternationalLicense());
+        // MID is backfilled into International License when previously empty
+        assertEquals("MID-200", existing.getInternationalLicense());
     }
 
     @Test
@@ -375,7 +375,8 @@ class MemberServiceTest {
         assertEquals(1, result.updated().size());
         assertEquals("name + DOB", result.updated().get(0).matchMethod());
         assertEquals("26U001", existing.getLicenseNumber());
-        assertNull(existing.getInternationalLicense());
+        // MID is backfilled into International License when previously empty
+        assertEquals("MID-300", existing.getInternationalLicense());
     }
 
     @Test
