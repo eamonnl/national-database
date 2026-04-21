@@ -66,7 +66,8 @@ nbdist/
 # macOS
 .DS_Store
 
-# Project specific
+# Project specific — output files containing PII are never committed
 MemberDatabase.xlsx
 /*.xlsx
+/*.csv
 /target

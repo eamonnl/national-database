@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -239,8 +240,11 @@ public class EventMasterService {
         String csvPath = "SqorzEntries_" + timestamp + ".csv";
 
         int written = 0;
+        // Sqorz reads its CSV files using Mac Roman encoding, so the output must
+        // match — writing UTF-8 causes multi-byte sequences (e.g. á = C3 A1) to be
+        // mis-interpreted as Mac Roman glyphs (√°), corrupting accented characters.
         try (PrintWriter out = new PrintWriter(
-                new OutputStreamWriter(new FileOutputStream(csvPath), StandardCharsets.UTF_8))) {
+                new OutputStreamWriter(new FileOutputStream(csvPath), Charset.forName("x-MacRoman")))) {
 
             for (String line : headerLines) out.println(line);
 
