@@ -3,6 +3,7 @@ package com.bmxireland.nationaldb.service;
 import com.bmxireland.nationaldb.model.Member;
 import com.bmxireland.nationaldb.model.RegistrationEntry;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.commons.text.similarity.LevenshteinDistance;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
@@ -21,6 +22,8 @@ public class MemberService {
     public static final String BULK_UPDATE_FIELD = "Plate 20";
     static final int STALE_LICENSE_YEARS = 3;
     static final int DOB_TOLERANCE_DAYS = 5;
+    private static final int NAME_FUZZY_DISTANCE = 1;
+    private static final LevenshteinDistance LEVENSHTEIN = LevenshteinDistance.getDefaultInstance();
 
     private final DatabaseService databaseService;
 
@@ -238,25 +241,33 @@ public class MemberService {
                 if (match != null) matchMethod = "licence number";
             }
 
-            // 3. Fallback: normalised name equality + DOB.
-            // Targets members who were added to the DB without a MID, or whose licence
-            // number changed since they were last imported. Uses equality (not substring)
-            // on the normalised name so "Smithson" never accidentally matches "Smith".
+            // 3. Fallback: normalised name (exact or ≤1 edit distance) + DOB.
+            // Targets members added without a MID, or whose licence number changed.
+            // Levenshtein distance ≤1 on the stripped name catches single-character
+            // typos (e.g. "JONSTON" → "Johnston", "DERMOT" → "Dermott") that would
+            // otherwise create duplicate records. DOB match is required to keep
+            // fuzzy name matching safe against false positives.
+            boolean nameWasCorrected = false;
             if (match == null) {
                 String normalizedEntryName = normalizeNameForMatch(
                         trim(entry.firstName()) + " " + trim(entry.lastName()));
                 List<Member> nameMatches = members.stream()
-                        .filter(m -> normalizeNameForMatch(
-                                StringUtils.defaultString(m.getGivenName()) + " " +
-                                StringUtils.defaultString(m.getFamilyName()))
-                                .equals(normalizedEntryName))
+                        .filter(m -> LEVENSHTEIN.apply(
+                                normalizeNameForMatch(
+                                        StringUtils.defaultString(m.getGivenName()) + " " +
+                                        StringUtils.defaultString(m.getFamilyName())),
+                                normalizedEntryName) <= NAME_FUZZY_DISTANCE)
                         .collect(Collectors.toList());
                 List<Member> dobMatches = nameMatches.stream()
                         .filter(m -> dobsMatch(trim(entry.dateOfBirth()), trim(m.getBirthDate())))
                         .collect(Collectors.toList());
                 if (dobMatches.size() == 1) {
                     match = dobMatches.get(0);
-                    matchMethod = "name + DOB";
+                    String normalizedMatchName = normalizeNameForMatch(
+                            StringUtils.defaultString(match.getGivenName()) + " " +
+                            StringUtils.defaultString(match.getFamilyName()));
+                    nameWasCorrected = !normalizedMatchName.equals(normalizedEntryName);
+                    matchMethod = nameWasCorrected ? "name (corrected) + DOB" : "name + DOB";
                 } else if (dobMatches.size() > 1) {
                     skipped.add(new ImportResult.SkippedEntry(entry.firstName(), entry.lastName(),
                             entry.licenseNumber(),
@@ -274,12 +285,28 @@ public class MemberService {
                 // fields are intentionally not updated here — the import only refreshes
                 // licence data. This preserves existing emergency contact details even when
                 // the CI export does not include those columns.
-                // Populate MID if the DB record had none — heals old records so future
-                // imports can match by MID rather than falling back to name+DOB again.
-                if ((match.getInternationalLicense() == null || match.getInternationalLicense().isBlank())
-                        && entry.memberId() != null && !entry.memberId().isBlank()) {
-                    match.setInternationalLicense(entry.memberId().trim());
-                    byMid.put(entry.memberId().trim(), match);
+
+                // Update licence class (Youth/Adult) from CI — covers members who have
+                // aged into the Adult category since last import.
+                String riderCat = (entry.riderCategory() != null && !entry.riderCategory().isBlank())
+                        ? entry.riderCategory() : entry.category();
+                String licenseClass = mapLicenseClass(riderCat);
+                if (licenseClass == null) licenseClass = licenseClassFromDob(entry.dateOfBirth());
+                if (licenseClass != null) match.setLicenseClass(licenseClass);
+
+                if (nameWasCorrected) {
+                    match.setGivenName(entry.firstName().trim());
+                    match.setFamilyName(capitalizeName(normalizeSeparators(entry.lastName())));
+                }
+
+                // Always sync the UCIID from CI — covers blank records and cases where
+                // CI has corrected a previously missing or misrecorded international ID.
+                if (entry.memberId() != null && !entry.memberId().isBlank()) {
+                    String incomingMid = entry.memberId().trim();
+                    if (!incomingMid.equals(StringUtils.defaultString(match.getInternationalLicense()).trim())) {
+                        match.setInternationalLicense(incomingMid);
+                        byMid.put(incomingMid, match);
+                    }
                 }
                 updated.add(new ImportResult.UpdatedEntry(match, oldLicense, entry.licenseNumber(), matchMethod));
 
