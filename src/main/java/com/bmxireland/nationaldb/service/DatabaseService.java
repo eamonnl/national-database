@@ -10,7 +10,10 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import org.apache.commons.lang3.StringUtils;
 import org.apache.commons.text.similarity.LevenshteinDistance;
@@ -25,9 +28,11 @@ import org.apache.poi.xssf.usermodel.XSSFCellStyle;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import com.bmxireland.nationaldb.config.RegistrationFormatConfig;
 import com.bmxireland.nationaldb.model.Member;
 import com.bmxireland.nationaldb.model.RegistrationEntry;
 import com.google.i18n.phonenumbers.NumberParseException;
@@ -47,6 +52,9 @@ public class DatabaseService {
 
     @Value("${database.file.path:MemberDatabase.xlsx}")
     private String databaseFilePath;
+
+    @Autowired
+    private RegistrationFormatConfig registrationFormat;
 
     private static final String FALLBACK_CLUB = "Other";
     private static final LevenshteinDistance LEVENSHTEIN = LevenshteinDistance.getDefaultInstance();
