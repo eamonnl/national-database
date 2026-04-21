@@ -7,11 +7,12 @@ ci-registration:
     # Each value is the exact column header text in the Cycling Ireland export file.
     # Update these if CI changes column names in a future export without modifying code.
     # Header matching is case-insensitive and ignores leading/trailing whitespace.
+    # Leave a value blank ("") to mark that field as absent in this year's file.
     club: "Club"
-    registration-date: "Registration Date"
-    expiry-date: "Expiry Date"
-    license-number: "Licence Number"
-    member-id: "MID"
+    registration-date: ""             # Not present in 2026 export; not stored in member DB
+    expiry-date: "Membership Year"    # Contains e.g. "2026"; code derives expiry as 31 Dec of that year
+    license-number: "License Number"  # Spelling changed from "Licence" in 2026 export
+    member-id: "UCIID"               # Was "MID" in previous exports
     category: "Category"
     rider-category: "Rider Category"
     first-name: "First Name"
@@ -20,5 +21,5 @@ ci-registration:
     date-of-birth: "DOB"
     gender: "Gender"
     nationality: "Nationality"
-    emergency-contact-name: "Emergency Contact Name"
-    emergency-contact-phone: "Emergency Contact Phone"
+    emergency-contact-name: ""        # Not present in 2026 export; existing DB values preserved
+    emergency-contact-phone: ""       # Not present in 2026 export; existing DB values preserved
