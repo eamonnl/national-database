@@ -243,7 +243,7 @@ public class DatabaseService {
                 entries.add(new RegistrationEntry(
                         col(row, colIndex, registrationFormat.getClub()),
                         col(row, colIndex, registrationFormat.getRegistrationDate()),
-                        col(row, colIndex, registrationFormat.getExpiryDate()),
+                        resolveExpiryDate(col(row, colIndex, registrationFormat.getExpiryDate())),
                         col(row, colIndex, registrationFormat.getLicenseNumber()),
                         col(row, colIndex, registrationFormat.getMemberId()),
                         col(row, colIndex, registrationFormat.getCategory()),
@@ -277,7 +277,11 @@ public class DatabaseService {
         return index;
     }
 
-    /** Checks every configured column header is present; throws with the full list of missing ones. */
+    /**
+     * Checks every non-optional configured column header is present.
+     * A field is optional when its configured header name is blank (set to "" in application.yml).
+     * Throws with the full list of missing required columns so all problems are visible at once.
+     */
     private void validateRegistrationHeaders(Map<String, Integer> colIndex) {
         List<String> missing = List.of(
                 registrationFormat.getClub(),
@@ -296,6 +300,7 @@ public class DatabaseService {
                 registrationFormat.getEmergencyContactName(),
                 registrationFormat.getEmergencyContactPhone()
         ).stream()
+                .filter(h -> h != null && !h.isBlank())          // blank = optional, skip
                 .filter(h -> !colIndex.containsKey(h.trim().toLowerCase()))
                 .collect(Collectors.toList());
 
@@ -306,10 +311,25 @@ public class DatabaseService {
         }
     }
 
-    /** Reads a cell value by configured header name. */
+    /**
+     * Reads a cell value by configured header name.
+     * Returns null if the header name is blank (field marked optional in config) or absent from the file.
+     */
     private String col(Row row, Map<String, Integer> colIndex, String headerName) {
+        if (headerName == null || headerName.isBlank()) return null;
         Integer idx = colIndex.get(headerName.trim().toLowerCase());
         return idx == null ? null : getCellStringValue(row.getCell(idx));
+    }
+
+    /**
+     * Normalises a raw expiry-date cell value.
+     * When the column contains a bare 4-digit year (e.g. from a "Membership Year" column),
+     * the expiry is set to 31 December of that year.  Full date strings are returned as-is.
+     */
+    private static String resolveExpiryDate(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        if (raw.trim().matches("\\d{4}")) return raw.trim() + "-12-31";
+        return raw;
     }
 
     /**

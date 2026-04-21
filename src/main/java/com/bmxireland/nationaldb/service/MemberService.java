@@ -270,6 +270,10 @@ public class MemberService {
                 match.setLicenseNumber(entry.licenseNumber());
                 match.setLicenseExpiry(entry.expiryDate());
                 match.setActive("Yes");
+                // Emergency contact, plate numbers, transponders, and other member-managed
+                // fields are intentionally not updated here — the import only refreshes
+                // licence data. This preserves existing emergency contact details even when
+                // the CI export does not include those columns.
                 // Populate MID if the DB record had none — heals old records so future
                 // imports can match by MID rather than falling back to name+DOB again.
                 if ((match.getInternationalLicense() == null || match.getInternationalLicense().isBlank())

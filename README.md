@@ -78,13 +78,37 @@ Names are matched against the database using a flexible search (substring and no
 
 ## Importing a registration file
 
-Option 7 reads a Cycling Ireland `.xlsx` export. Each entry is matched to the existing database in priority order:
+Option 7 reads a Cycling Ireland `.xlsx` export. The file must contain exactly one sheet.
 
-1. **MID** (Cycling Ireland member ID) — most reliable; survives annual licence changes
-2. **Licence number** — exact match
-3. **Name + date of birth** — fallback, with ±5 day DOB tolerance for data entry variation
+Each entry is matched to the existing database in priority order:
 
-Matched members have their licence number and registration details updated. Unmatched entries are added as new members. The MID column is used only for matching and is not written to any database field.
+1. **UCIID / MID** (Cycling Ireland member ID) — most reliable; survives annual licence changes
+2. **Licence number** — exact match on the current licence string
+3. **Name + date of birth** — fallback for members who were previously added without a UCIID, or whose licence number has changed. Name matching strips all whitespace, punctuation, and capitalisation differences (e.g. `O'Brien`, `Obrien`, and `O BRIEN` all match). DOB is compared with a ±5-day tolerance to absorb common data entry errors.
+
+Matched members have their licence number, licence expiry, and active status updated. When a member is matched by name + DOB and their database record has no UCIID, the UCIID from the import file is written back — so future imports find them by UCIID instead of falling back to name + DOB again.
+
+Unmatched entries are added as new members.
+
+Emergency contact details, race plate numbers, transponder numbers, and other member-managed fields are **never overwritten** by an import — only licence data is updated.
+
+### Configuring the column format
+
+The Cycling Ireland export format can change from year to year. Column names are configured in `src/main/resources/application.yml` under `ci-registration.format` — no code change or rebuild is needed when CI rename columns:
+
+```yaml
+ci-registration:
+  format:
+    club: "Club"
+    expiry-date: "Membership Year"   # or "Expiry Date" if a full date column is present
+    license-number: "License Number"
+    member-id: "UCIID"
+    # ... etc.
+```
+
+Header matching is case-insensitive and ignores leading/trailing whitespace. Set a field to `""` to mark it as absent in the current year's file — it will be skipped during validation and left null in the imported record.
+
+When the expiry column contains a bare 4-digit year (e.g. `2026` from a "Membership Year" column), the licence expiry is automatically set to 31 December of that year.
 
 ## Saving
 
@@ -140,6 +164,8 @@ src/main/java/com/bmxireland/nationaldb/
 ├── NationalDatabaseApplication.java   — Spring Boot entry point
 ├── cli/
 │   └── DatabaseCommandLineRunner.java — Interactive menu loop
+├── config/
+│   └── RegistrationFormatConfig.java  — CI import column-name configuration (@ConfigurationProperties)
 ├── model/
 │   ├── Member.java                    — Member record model
 │   └── RegistrationEntry.java         — Cycling Ireland import record
