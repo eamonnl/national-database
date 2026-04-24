@@ -2,6 +2,7 @@ package com.bmxireland.nationaldb.cli.handler;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.Map;
 import java.util.Scanner;
 import java.util.stream.Stream;
 
@@ -14,9 +15,13 @@ import com.bmxireland.nationaldb.cli.MenuHandler;
 import com.bmxireland.nationaldb.cli.SessionState;
 import com.bmxireland.nationaldb.model.BookingEntry;
 import com.bmxireland.nationaldb.model.Member;
+import com.bmxireland.nationaldb.service.AbilityDivisionLoader;
+import com.bmxireland.nationaldb.service.AgeBasedClassStrategy;
+import com.bmxireland.nationaldb.service.DivisionLookupClassStrategy;
 import com.bmxireland.nationaldb.service.EventMasterService;
 import com.bmxireland.nationaldb.service.EventMasterService.BookingImportResult;
 import com.bmxireland.nationaldb.service.EventMasterService.SqorzExportResult;
+import com.bmxireland.nationaldb.service.RaceClassStrategy;
 
 /**
  * Imports an EventMaster BookingDetails report:
@@ -29,15 +34,18 @@ public class ImportRaceEntriesHandler implements MenuHandler {
     private static final Logger log = LoggerFactory.getLogger(ImportRaceEntriesHandler.class);
 
     private final EventMasterService eventMasterService;
-    private final ValidationHandler validationHandler;
     private final SessionState session;
+    private final AgeBasedClassStrategy ageBasedClassStrategy;
+    private final AbilityDivisionLoader abilityDivisionLoader;
 
     public ImportRaceEntriesHandler(EventMasterService eventMasterService,
-                                    ValidationHandler validationHandler,
-                                    SessionState session) {
+                                    SessionState session,
+                                    AgeBasedClassStrategy ageBasedClassStrategy,
+                                    AbilityDivisionLoader abilityDivisionLoader) {
         this.eventMasterService = eventMasterService;
-        this.validationHandler = validationHandler;
         this.session = session;
+        this.ageBasedClassStrategy = ageBasedClassStrategy;
+        this.abilityDivisionLoader = abilityDivisionLoader;
     }
 
     @Override
@@ -94,14 +102,15 @@ public class ImportRaceEntriesHandler implements MenuHandler {
 
         if (!importResult.added().isEmpty() || !importResult.updated().isEmpty()) {
             session.markChanged();
-            System.out.println("\nRe-validating...");
-            validationHandler.runInline();
         }
 
         // Phase 2: generate Sqorz CSV
+        RaceClassStrategy classStrategy = promptForClassStrategy(scanner);
+        if (classStrategy == null) return;
+
         System.out.println("\n  ── Generating Sqorz entry file ──");
         try {
-            SqorzExportResult exportResult = eventMasterService.generateSqorzCsv(session.getMembers(), entries);
+            SqorzExportResult exportResult = eventMasterService.generateSqorzCsv(session.getMembers(), entries, classStrategy);
 
             System.out.printf("  Sqorz CSV written to: %s (%d entries)%n",
                     exportResult.outputPath(), exportResult.entriesWritten());
@@ -114,11 +123,55 @@ public class ImportRaceEntriesHandler implements MenuHandler {
                             w.name(), w.licenseNumber(), w.eventMasterClass(), w.dobDerivedClass());
                 }
             }
+
+            if (classStrategy instanceof DivisionLookupClassStrategy lookup
+                    && !lookup.getUnmatchedRiders().isEmpty()) {
+                System.out.printf("%n  WARNING: %d rider(s) not found in division file — assigned %s (manual assignment required):%n",
+                        lookup.getUnmatchedRiders().size(),
+                        com.bmxireland.nationaldb.model.ClubDivision.D0);
+                for (String name : lookup.getUnmatchedRiders()) {
+                    System.out.printf("    %s%n", name);
+                }
+            }
         } catch (IOException e) {
             System.err.println("  ERROR: Could not write Sqorz CSV: " + e.getMessage());
             log.error("Failed to generate Sqorz CSV", e);
         }
 
         System.out.println("═════════════════════════════════════════════════════════════════");
+    }
+
+    /**
+     * Prompts the user to choose a division type and returns the appropriate strategy.
+     * Returns null if the user cancels (e.g. fails to supply a required file).
+     */
+    private RaceClassStrategy promptForClassStrategy(Scanner scanner) {
+        System.out.println("\n  Division type:");
+        System.out.println("    1. National Series  (age-based divisions)");
+        System.out.println("    2. Club Event       (ability-based divisions)");
+        System.out.print("  Select: ");
+        String choice = scanner.nextLine().trim();
+
+        if (!"2".equals(choice)) {
+            System.out.println("  Using age-based divisions.");
+            return ageBasedClassStrategy;
+        }
+
+        System.out.print("  Enter path to ability-based division xlsx file: ");
+        String divisionFilePath = InputUtils.normalizeFilePath(scanner.nextLine());
+        if (divisionFilePath.isEmpty()) {
+            System.out.println("Cancelled.");
+            return null;
+        }
+
+        try {
+            Map<String, String> divisionMap = abilityDivisionLoader.loadDivisionMap(divisionFilePath);
+            System.out.printf("  Loaded %d riders from division file.%n", divisionMap.size());
+            return new DivisionLookupClassStrategy(divisionMap);
+        } catch (IOException e) {
+            System.err.println("  ERROR: Could not read division file: " + e.getMessage());
+            log.error("Failed to load division file: {}", divisionFilePath, e);
+            return null;
+        }
     }
 }

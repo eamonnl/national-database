@@ -221,15 +221,16 @@ public class EventMasterService {
      *
      * <p>The output file header rows are read verbatim from the bundled
      * {@code SqorzEntries v1.1.csv} template. One data row is written per booking entry.
-     * If the EventMaster age group does not match the DOB-derived class the DOB-derived
-     * class is used and the discrepancy is recorded as a warning.</p>
+     * The supplied {@link RaceClassStrategy} determines the Sqorz class for each rider.</p>
      *
-     * @param members the in-memory member list (after phase 1 merge)
-     * @param entries booking entries (determines output row order)
+     * @param members       the in-memory member list (after phase 1 merge)
+     * @param entries       booking entries (determines output row order)
+     * @param classStrategy strategy used to resolve the Sqorz class for each rider
      * @return result with output path, row count, and any class-mismatch warnings
      * @throws IOException if the output file cannot be written or the template is missing
      */
-    public SqorzExportResult generateSqorzCsv(List<Member> members, List<BookingEntry> entries)
+    public SqorzExportResult generateSqorzCsv(List<Member> members, List<BookingEntry> entries,
+                                               RaceClassStrategy classStrategy)
             throws IOException {
 
         Map<String, Member> byLicense = buildLicenseIndex(members);
@@ -271,21 +272,15 @@ public class EventMasterService {
                     transponder20 = entry.transponderNumber().trim();
                 }
 
-                // Class name derivation
-                String emClass    = StringUtils.isNotBlank(entry.ageGroupYouth())
-                        ? entry.ageGroupYouth() : entry.ageGroupAdult();
-                String sqorzClass = mapToSqorzClass(emClass);
-
-                if (sqorzClass != null && !"SuperClass".equals(sqorzClass)) {
-                    String dobDerived = deriveClassFromDob(member.getGender(), member.getBirthDate());
-                    if (dobDerived != null && !dobDerived.equals(sqorzClass)) {
-                        String memberName = member.getGivenName() + " " + member.getFamilyName();
-                        warnings.add(new SqorzExportResult.ClassMismatchWarning(
-                                member.getLicenseNumber(), memberName, sqorzClass, dobDerived));
-                        log.warn("Class mismatch for {} [{}]: EventMaster='{}', DOB-derived='{}'",
-                                memberName, member.getLicenseNumber(), sqorzClass, dobDerived);
-                        sqorzClass = dobDerived;
-                    }
+                // Class name derivation — delegated to the supplied strategy
+                RaceClassStrategy.ClassResolution resolution = classStrategy.resolve(entry, member);
+                String sqorzClass = resolution.sqorzClass();
+                if (resolution.supersededClass() != null) {
+                    String memberName = member.getGivenName() + " " + member.getFamilyName();
+                    warnings.add(new SqorzExportResult.ClassMismatchWarning(
+                            member.getLicenseNumber(), memberName, resolution.supersededClass(), sqorzClass));
+                    log.warn("Class mismatch for {} [{}]: EventMaster='{}', DOB-derived='{}'",
+                            memberName, member.getLicenseNumber(), resolution.supersededClass(), sqorzClass);
                 }
 
                 out.println(toCsvRow(
