@@ -3,12 +3,14 @@ package com.bmxireland.nationaldb.service;
 import com.bmxireland.nationaldb.model.Member;
 import com.bmxireland.nationaldb.model.RegistrationEntry;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.commons.text.similarity.LevenshteinDistance;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.stream.Collectors;
 
 /**
@@ -21,14 +23,13 @@ public class MemberService {
 
     public static final String BULK_UPDATE_FIELD = "Plate 20";
     static final int STALE_LICENSE_YEARS = 3;
-    static final int DOB_TOLERANCE_DAYS = 5;
-    private static final int NAME_FUZZY_DISTANCE = 1;
-    private static final LevenshteinDistance LEVENSHTEIN = LevenshteinDistance.getDefaultInstance();
 
     private final DatabaseService databaseService;
+    private final MemberMatcherFactory matcherFactory;
 
-    public MemberService(DatabaseService databaseService) {
+    public MemberService(DatabaseService databaseService, MemberMatcherFactory matcherFactory) {
         this.databaseService = databaseService;
+        this.matcherFactory  = matcherFactory;
     }
 
     // ---- Result types ----
@@ -209,117 +210,69 @@ public class MemberService {
      * On no match: a new member row is added.
      */
     public ImportResult importRegistrationData(List<Member> members, List<RegistrationEntry> entries) {
-        List<ImportResult.UpdatedEntry> updated = new ArrayList<>();
-        List<Member>                   added   = new ArrayList<>();
-        List<ImportResult.SkippedEntry> skipped = new ArrayList<>();
+        List<ImportResult.UpdatedEntry>  updated = new ArrayList<>();
+        List<Member>                     added   = new ArrayList<>();
+        List<ImportResult.SkippedEntry>  skipped = new ArrayList<>();
 
-        // Build lookup maps for fast matching
-        Map<String, Member> byMid     = new HashMap<>();
-        Map<String, Member> byLicense = new HashMap<>();
-        for (Member m : members) {
-            if (m.getInternationalLicense() != null && !m.getInternationalLicense().isBlank()) {
-                byMid.put(m.getInternationalLicense().trim(), m);
-            }
-            if (m.getLicenseNumber() != null && !m.getLicenseNumber().isBlank()) {
-                byLicense.put(m.getLicenseNumber().trim(), m);
-            }
-        }
+        MemberMatchingSession session = matcherFactory.createSession(members);
 
         for (RegistrationEntry entry : entries) {
-            Member match = null;
-            String matchMethod = null;
+            MatchCandidate candidate = new MatchCandidate(
+                    entry.memberId(),
+                    entry.licenseNumber(),
+                    entry.firstName(),
+                    entry.lastName(),
+                    entry.dateOfBirth(),
+                    entry.club());
 
-            // 1. Match by MID
-            if (entry.memberId() != null && !entry.memberId().isBlank()) {
-                match = findByMid(byMid, entry.memberId().trim());
-                if (match != null) matchMethod = "MID";
+            MatchResult result = session.match(candidate);
+
+            if (result.ambiguous()) {
+                skipped.add(new ImportResult.SkippedEntry(entry.firstName(), entry.lastName(),
+                        entry.licenseNumber(),
+                        "Ambiguous: name + DOB matched " + result.ambiguousCount() + " members"));
+                continue;
             }
 
-            // 2. Match by licence number
-            if (match == null && entry.licenseNumber() != null && !entry.licenseNumber().isBlank()) {
-                match = byLicense.get(entry.licenseNumber().trim());
-                if (match != null) matchMethod = "licence number";
-            }
-
-            // 3. Fallback: normalised name (exact or ≤1 edit distance) + DOB.
-            // Targets members added without a MID, or whose licence number changed.
-            // Levenshtein distance ≤1 on the stripped name catches single-character
-            // typos (e.g. "JONSTON" → "Johnston", "DERMOT" → "Dermott") that would
-            // otherwise create duplicate records. DOB match is required to keep
-            // fuzzy name matching safe against false positives.
-            boolean nameWasCorrected = false;
-            if (match == null) {
-                String normalizedEntryName = normalizeNameForMatch(
-                        trim(entry.firstName()) + " " + trim(entry.lastName()));
-                List<Member> nameMatches = members.stream()
-                        .filter(m -> LEVENSHTEIN.apply(
-                                normalizeNameForMatch(
-                                        StringUtils.defaultString(m.getGivenName()) + " " +
-                                        StringUtils.defaultString(m.getFamilyName())),
-                                normalizedEntryName) <= NAME_FUZZY_DISTANCE)
-                        .collect(Collectors.toList());
-                List<Member> dobMatches = nameMatches.stream()
-                        .filter(m -> dobsMatch(trim(entry.dateOfBirth()), trim(m.getBirthDate())))
-                        .collect(Collectors.toList());
-                if (dobMatches.size() == 1) {
-                    match = dobMatches.get(0);
-                    String normalizedMatchName = normalizeNameForMatch(
-                            StringUtils.defaultString(match.getGivenName()) + " " +
-                            StringUtils.defaultString(match.getFamilyName()));
-                    nameWasCorrected = !normalizedMatchName.equals(normalizedEntryName);
-                    matchMethod = nameWasCorrected ? "name (corrected) + DOB" : "name + DOB";
-                } else if (dobMatches.size() > 1) {
-                    skipped.add(new ImportResult.SkippedEntry(entry.firstName(), entry.lastName(),
-                            entry.licenseNumber(),
-                            "Ambiguous: name + DOB matched " + dobMatches.size() + " members"));
-                    continue;
-                }
-            }
-
-            if (match != null) {
+            if (result.found()) {
+                Member match    = result.member();
                 String oldLicense = match.getLicenseNumber();
+
                 match.setLicenseNumber(entry.licenseNumber());
                 match.setLicenseExpiry(entry.expiryDate());
                 match.setActive("Yes");
-                // Emergency contact, plate numbers, transponders, and other member-managed
-                // fields are intentionally not updated here — the import only refreshes
-                // licence data. This preserves existing emergency contact details even when
-                // the CI export does not include those columns.
 
-                // Update licence class (Youth/Adult) from CI — covers members who have
-                // aged into the Adult category since last import.
                 String riderCat = (entry.riderCategory() != null && !entry.riderCategory().isBlank())
                         ? entry.riderCategory() : entry.category();
                 String licenseClass = mapLicenseClass(riderCat);
                 if (licenseClass == null) licenseClass = licenseClassFromDob(entry.dateOfBirth());
                 if (licenseClass != null) match.setLicenseClass(licenseClass);
 
-                if (nameWasCorrected) {
+                if (result.nameWasCorrected()) {
                     match.setGivenName(entry.firstName().trim());
                     match.setFamilyName(capitalizeName(normalizeSeparators(entry.lastName())));
                 }
 
-                // Populate UCIID only when the DB record has none — heals records that were
-                // added without an international ID. An existing value is never overwritten
-                // because CI data is not guaranteed to be more accurate than what is stored.
-                if ((match.getInternationalLicense() == null || match.getInternationalLicense().isBlank())
-                        && entry.memberId() != null && !entry.memberId().isBlank()) {
-                    match.setInternationalLicense(entry.memberId().trim());
-                    byMid.put(entry.memberId().trim(), match);
+                // Backfill MID only when the DB record has none — an existing value is never
+                // overwritten because CI data is not guaranteed to be more accurate than stored.
+                String newMid = null;
+                if (StringUtils.isBlank(match.getInternationalLicense())
+                        && StringUtils.isNotBlank(entry.memberId())) {
+                    newMid = entry.memberId().trim();
+                    match.setInternationalLicense(newMid);
                 }
-                updated.add(new ImportResult.UpdatedEntry(match, oldLicense, entry.licenseNumber(), matchMethod));
 
-                // Keep lookup maps current so later entries in the same file don't re-match
-                if (entry.licenseNumber() != null) byLicense.put(entry.licenseNumber().trim(), match);
+                session.refreshIndices(match, entry.licenseNumber(), newMid);
+                updated.add(new ImportResult.UpdatedEntry(match, oldLicense, entry.licenseNumber(),
+                        result.matchMethod()));
 
             } else {
-                // No match found — add as new member regardless of NEW/RENEWAL flag.
-                // Unmatched RENEWALs are treated as new registrations; the duplicate-member
-                // validation will surface any collision with an existing row so it can be merged.
+                // No match — add as new member. Unmatched RENEWALs are treated as new
+                // registrations; duplicate-member validation will surface any collision.
                 Member newMember = buildMember(entry, members.size() + added.size());
                 added.add(newMember);
-                if (newMember.getLicenseNumber() != null) byLicense.put(newMember.getLicenseNumber().trim(), newMember);
-                if (newMember.getInternationalLicense() != null) byMid.put(newMember.getInternationalLicense().trim(), newMember);
+                session.refreshIndices(newMember,
+                        newMember.getLicenseNumber(), newMember.getInternationalLicense());
             }
         }
 
@@ -340,21 +293,6 @@ public class MemberService {
     }
 
     // ---- Private helpers ----
-
-    private Member findByMid(Map<String, Member> byMid, String mid) {
-        Member exact = byMid.get(mid);
-        if (exact != null) return exact;
-        // Numeric comparison to handle leading-zero differences (e.g. "0289679" vs "289679")
-        try {
-            long numericMid = Long.parseLong(mid);
-            for (Map.Entry<String, Member> e : byMid.entrySet()) {
-                try {
-                    if (Long.parseLong(e.getKey()) == numericMid) return e.getValue();
-                } catch (NumberFormatException ignored) {}
-            }
-        } catch (NumberFormatException ignored) {}
-        return null;
-    }
 
     private Member buildMember(RegistrationEntry entry, int rowIndex) {
         Member m = new Member();
@@ -428,9 +366,8 @@ public class MemberService {
      * non-alphabetic characters (apostrophes, hyphens, spaces, etc.).
      * "O'Connell", "O Connell", and "OConnell" all normalise to "oconnell".
      */
-    private static String normalizeNameForMatch(String name) {
-        if (name == null) return "";
-        return name.toLowerCase().replaceAll("[^a-z]", "");
+    static String normalizeNameForMatch(String name) {
+        return MemberMatchingSession.normalizeNameForMatch(name);
     }
 
     /**
@@ -479,15 +416,7 @@ public class MemberService {
     }
 
     static boolean dobsMatch(String dob1, String dob2) {
-        if (dob1 == null || dob1.isEmpty() || dob2 == null || dob2.isEmpty()) return false;
-        if (dob1.equalsIgnoreCase(dob2)) return true;
-        try {
-            long diff = Math.abs(java.time.temporal.ChronoUnit.DAYS.between(
-                    LocalDate.parse(dob1), LocalDate.parse(dob2)));
-            return diff <= DOB_TOLERANCE_DAYS;
-        } catch (DateTimeParseException ignored) {
-            return false;
-        }
+        return MemberMatchingSession.dobsMatch(dob1, dob2);
     }
 
     private String trim(String value) {

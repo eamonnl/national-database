@@ -23,7 +23,7 @@ class MemberServiceTest {
     @BeforeEach
     void setUp() {
         // DatabaseService field access is pure in-memory — no file I/O, no Spring context needed.
-        memberService = new MemberService(new DatabaseService());
+        memberService = new MemberService(new DatabaseService(), new MemberMatcherFactory());
     }
 
     // ---- Helpers ----

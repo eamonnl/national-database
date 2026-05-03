@@ -77,15 +77,19 @@ public class EventMasterService {
     );
 
     private final DatabaseService databaseService;
+    private final MemberMatcherFactory matcherFactory;
 
-    public EventMasterService(DatabaseService databaseService) {
+    public EventMasterService(DatabaseService databaseService, MemberMatcherFactory matcherFactory) {
         this.databaseService = databaseService;
+        this.matcherFactory  = matcherFactory;
     }
 
     // ---- Result types ----
 
     public record BookingImportResult(List<Member> added, List<UpdatedMember> updated) {
-        public record UpdatedMember(Member member, String updatedPlate, String updatedTransponder) {}
+        public record UpdatedMember(Member member, String matchMethod,
+                                        String oldLicenseNumber,
+                                        String updatedPlate, String updatedTransponder) {}
     }
 
     public record SqorzExportResult(int entriesWritten, String outputPath,
@@ -153,7 +157,8 @@ public class EventMasterService {
                         get(row, col, "Emergency Contact Name"),
                         get(row, col, "Emergency Contact Phone"),
                         get(row, col, "Email"),
-                        get(row, col, "Mobile")
+                        get(row, col, "Mobile"),
+                        get(row, col, "UCI ID")
                 ));
             }
         }
@@ -178,36 +183,93 @@ public class EventMasterService {
         List<Member> added = new ArrayList<>();
         List<BookingImportResult.UpdatedMember> updated = new ArrayList<>();
 
-        Map<String, Member> byLicense = buildLicenseIndex(members);
+        MemberMatchingSession session = matcherFactory.createSession(members);
 
         for (BookingEntry entry : entries) {
-            String key = entry.licenseNumber().trim().toUpperCase();
-            Member member = byLicense.get(key);
+            // Prefer UCI ID as the international identifier; fall back to CI mid.
+            String mid = StringUtils.isNotBlank(entry.uciId()) ? entry.uciId() : entry.memberId();
+            MatchCandidate candidate = new MatchCandidate(
+                    mid,
+                    entry.licenseNumber(),
+                    entry.firstName(),
+                    entry.lastName(),
+                    entry.dateOfBirth(),
+                    entry.clubName());
 
-            if (member == null) {
+            MatchResult result = session.match(candidate);
+
+            if (result.ambiguous()) {
+                // Cannot safely identify which member to update — add as new so the
+                // duplicate-member check surfaces it for manual review.
+                log.warn("Ambiguous name+DOB match for {} {} ({} candidates) — added as new",
+                        entry.firstName(), entry.lastName(), result.ambiguousCount());
                 Member newMember = buildMemberFromBooking(entry, members.size() + added.size());
                 added.add(newMember);
-                byLicense.put(key, newMember);
+                session.refreshIndices(newMember, newMember.getLicenseNumber(), null);
+
+            } else if (result.found()) {
+                Member match = result.member();
+
+                if ("licence number".equals(result.matchMethod())) {
+                    // Licence already matches — only backfill missing equipment data.
+                    String updatedPlate       = null;
+                    String updatedTransponder = null;
+                    if (StringUtils.isBlank(match.getPlate20()) && isValidPlate(entry.bmxRaceNumber())) {
+                        updatedPlate = entry.bmxRaceNumber().trim();
+                        match.setPlate20(updatedPlate);
+                    }
+                    if (StringUtils.isBlank(match.getTransponder20()) && isValidTransponder(entry.transponderNumber())) {
+                        updatedTransponder = entry.transponderNumber().trim();
+                        match.setTransponder20(updatedTransponder);
+                    }
+                    if (updatedPlate != null || updatedTransponder != null) {
+                        updated.add(new BookingImportResult.UpdatedMember(
+                                match, "licence number", null, updatedPlate, updatedTransponder));
+                        log.info("Backfilled data for {} [{}]: plate={}, transponder={}",
+                                match.getFamilyName(), match.getLicenseNumber(), updatedPlate, updatedTransponder);
+                    }
+                } else {
+                    // Matched by MID or name+DOB — update licence number only when it changed.
+                    String oldLicense = match.getLicenseNumber();
+                    boolean licenceChanged = !entry.licenseNumber().trim()
+                            .equalsIgnoreCase(oldLicense != null ? oldLicense : "");
+
+                    if (licenceChanged) {
+                        match.setLicenseNumber(entry.licenseNumber().trim());
+                        match.setLicenseExpiry(LocalDate.now().getYear() + "-12-31");
+                        session.refreshIndices(match, entry.licenseNumber(), null);
+                    }
+
+                    String updatedPlate       = null;
+                    String updatedTransponder = null;
+                    if (StringUtils.isBlank(match.getPlate20()) && isValidPlate(entry.bmxRaceNumber())) {
+                        updatedPlate = entry.bmxRaceNumber().trim();
+                        match.setPlate20(updatedPlate);
+                    }
+                    if (StringUtils.isBlank(match.getTransponder20()) && isValidTransponder(entry.transponderNumber())) {
+                        updatedTransponder = entry.transponderNumber().trim();
+                        match.setTransponder20(updatedTransponder);
+                    }
+
+                    if (licenceChanged) {
+                        updated.add(new BookingImportResult.UpdatedMember(
+                                match, result.matchMethod(), oldLicense, updatedPlate, updatedTransponder));
+                        log.info("Matched by {} for {} {} — updated licence {} → {}",
+                                result.matchMethod(), match.getGivenName(), match.getFamilyName(),
+                                oldLicense, match.getLicenseNumber());
+                    } else if (updatedPlate != null || updatedTransponder != null) {
+                        updated.add(new BookingImportResult.UpdatedMember(
+                                match, result.matchMethod(), null, updatedPlate, updatedTransponder));
+                        log.info("Backfilled data for {} [{}]: plate={}, transponder={}",
+                                match.getFamilyName(), match.getLicenseNumber(), updatedPlate, updatedTransponder);
+                    }
+                }
+            } else {
+                Member newMember = buildMemberFromBooking(entry, members.size() + added.size());
+                added.add(newMember);
+                session.refreshIndices(newMember, newMember.getLicenseNumber(), null);
                 log.info("New member added from booking: {} {} [{}]",
                         newMember.getGivenName(), newMember.getFamilyName(), newMember.getLicenseNumber());
-            } else {
-                String updatedPlate       = null;
-                String updatedTransponder = null;
-
-                if (StringUtils.isBlank(member.getPlate20()) && isValidPlate(entry.bmxRaceNumber())) {
-                    updatedPlate = entry.bmxRaceNumber().trim();
-                    member.setPlate20(updatedPlate);
-                }
-                if (StringUtils.isBlank(member.getTransponder20()) && isValidTransponder(entry.transponderNumber())) {
-                    updatedTransponder = entry.transponderNumber().trim();
-                    member.setTransponder20(updatedTransponder);
-                }
-
-                if (updatedPlate != null || updatedTransponder != null) {
-                    updated.add(new BookingImportResult.UpdatedMember(member, updatedPlate, updatedTransponder));
-                    log.info("Backfilled data for {} [{}]: plate={}, transponder={}",
-                            member.getFamilyName(), member.getLicenseNumber(), updatedPlate, updatedTransponder);
-                }
             }
         }
 
@@ -382,6 +444,14 @@ public class EventMasterService {
         }
         if (isValidTransponder(entry.transponderNumber())) {
             m.setTransponder20(entry.transponderNumber().trim());
+        }
+
+        // Booking entries don't carry an expiry date; default to 31 Dec of the current year
+        // since the rider is actively booking for an event and must hold a valid licence.
+        m.setLicenseExpiry(LocalDate.now().getYear() + "-12-31");
+
+        if (StringUtils.isNotBlank(entry.uciId())) {
+            m.setInternationalLicense(entry.uciId().trim());
         }
 
         m.setEmail(entry.email());

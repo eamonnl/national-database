@@ -7,7 +7,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.*;
+import java.util.function.BiConsumer;
 
 /**
  * Service responsible for validating the member database.
@@ -18,9 +21,10 @@ public class ValidationService {
 
     private static final Logger log = LoggerFactory.getLogger(ValidationService.class);
 
-    /**
-     * Represents a single validation issue.
-     */
+    // Licences expiring more than this many years ago are considered stale for plate reclamation.
+    private static final int STALE_RECLAIM_YEARS = 1;
+
+    /** A single validation issue to be reported to the user. */
     public record ValidationIssue(String category, String description, List<Member> affectedMembers) {
         public String format() {
             StringBuilder sb = new StringBuilder();
@@ -32,16 +36,29 @@ public class ValidationService {
         }
     }
 
-    /**
-     * Runs all validations on the member list and returns the issues found.
-     *
-     * @param members the full member list
-     * @return list of validation issues (empty if database is clean)
-     */
-    public List<ValidationIssue> validateAll(List<Member> members) {
-        List<ValidationIssue> issues = new ArrayList<>();
+    /** A plate number automatically reclaimed from an expired licence holder. */
+    public record ReclaimedPlate(String fieldName, String plateValue,
+                                  Member activeHolder, Member staleMember) {}
 
-        issues.addAll(validateNoDuplicateRaceNumbers(members));
+    /** Combined result of a full validation run. */
+    public record ValidationResult(List<ValidationIssue> issues, List<ReclaimedPlate> reclaimed) {}
+
+    /** Result of a plate-duplicate check (issues to report + plates auto-reclaimed). */
+    public record PlateCheckResult(List<ValidationIssue> issues, List<ReclaimedPlate> reclaimed) {}
+
+    /**
+     * Runs all validations on the member list.
+     * Plate numbers shared between an active and a stale licence holder are automatically
+     * reclaimed (the stale holder's plate is cleared) rather than reported as duplicates.
+     */
+    public ValidationResult validateAll(List<Member> members) {
+        List<ValidationIssue> issues   = new ArrayList<>();
+        List<ReclaimedPlate>  reclaimed = new ArrayList<>();
+
+        PlateCheckResult plateCheck = validateNoDuplicateRaceNumbers(members);
+        issues.addAll(plateCheck.issues());
+        reclaimed.addAll(plateCheck.reclaimed());
+
         issues.addAll(validateRaceNumberRange(members));
         issues.addAll(validateNoDuplicateTransponderNumbers(members));
         issues.addAll(validateNoPossibleDuplicateMembers(members));
@@ -49,28 +66,39 @@ public class ValidationService {
         issues.addAll(validateTransponderFormats(members));
         issues.addAll(validateDateFormats(members));
 
-        if (issues.isEmpty()) {
+        if (issues.isEmpty() && reclaimed.isEmpty()) {
             log.info("Validation passed: no issues found.");
         } else {
-            log.warn("Validation found {} issue(s).", issues.size());
+            if (!reclaimed.isEmpty()) log.info("Auto-reclaimed {} plate(s).", reclaimed.size());
+            if (!issues.isEmpty())    log.warn("Validation found {} issue(s).", issues.size());
         }
 
-        return issues;
+        return new ValidationResult(issues, reclaimed);
     }
 
     /**
-     * Validates that no two members share the same race (plate) number within each category.
-     * Ignores null, empty, and "None" values.
+     * Checks for duplicate race (plate) numbers across all plate fields.
+     *
+     * <ul>
+     *   <li>When two members share a plate and one holds an expired (stale) licence while
+     *       the other holds an active one, the plate is silently reclaimed from the stale
+     *       holder — their plate field is cleared and a {@link ReclaimedPlate} is returned.</li>
+     *   <li>When two members share a plate but one is Adult-class and the other is
+     *       Youth-class the conflict is suppressed — plates are per-class in competition.</li>
+     *   <li>All other duplicates are returned as {@link ValidationIssue} entries.</li>
+     * </ul>
      */
-    public List<ValidationIssue> validateNoDuplicateRaceNumbers(List<Member> members) {
-        List<ValidationIssue> issues = new ArrayList<>();
+    public PlateCheckResult validateNoDuplicateRaceNumbers(List<Member> members) {
+        List<ValidationIssue> issues   = new ArrayList<>();
+        List<ReclaimedPlate>  reclaimed = new ArrayList<>();
+        LocalDate staleCutoff = LocalDate.now().minusYears(STALE_RECLAIM_YEARS);
 
-        issues.addAll(findDuplicates(members, "Plate 20", Member::getPlate20));
-        issues.addAll(findDuplicates(members, "Plate 24", Member::getPlate24));
-        issues.addAll(findDuplicates(members, "Plate Retro", Member::getPlateRetro));
-        issues.addAll(findDuplicates(members, "Plate Open", Member::getPlateOpen));
+        checkDuplicatePlates(members, "Plate 20",    Member::getPlate20,    Member::setPlate20,    issues, reclaimed, staleCutoff);
+        checkDuplicatePlates(members, "Plate 24",    Member::getPlate24,    Member::setPlate24,    issues, reclaimed, staleCutoff);
+        checkDuplicatePlates(members, "Plate Retro", Member::getPlateRetro, Member::setPlateRetro, issues, reclaimed, staleCutoff);
+        checkDuplicatePlates(members, "Plate Open",  Member::getPlateOpen,  Member::setPlateOpen,  issues, reclaimed, staleCutoff);
 
-        return issues;
+        return new PlateCheckResult(issues, reclaimed);
     }
 
     /**
@@ -258,6 +286,93 @@ public class ValidationService {
     }
 
     // ---- Private helpers ----
+
+    private void checkDuplicatePlates(List<Member> members, String fieldName,
+                                      FieldExtractor getter, BiConsumer<Member, String> setter,
+                                      List<ValidationIssue> issues, List<ReclaimedPlate> reclaimed,
+                                      LocalDate staleCutoff) {
+        Map<String, List<Member>> valueMap = new LinkedHashMap<>();
+        for (Member m : members) {
+            String value = getter.extract(m);
+            if (isBlankOrNone(value)) continue;
+            valueMap.computeIfAbsent(value.trim().toUpperCase(), k -> new ArrayList<>()).add(m);
+        }
+
+        for (Map.Entry<String, List<Member>> entry : valueMap.entrySet()) {
+            List<Member> holders = entry.getValue();
+            if (holders.size() < 2) continue;
+
+            String plateValue = entry.getKey();
+
+            if (holders.size() == 2) {
+                Member first  = holders.get(0);
+                Member second = holders.get(1);
+
+                // Suppress Adult vs Youth — plates are per-class in competition
+                if (isAdultYouthPair(first, second)) continue;
+
+                // Plates below 100 are protected lifetime plates — never auto-reclaim
+                try {
+                    if (Integer.parseInt(plateValue) < 100) {
+                        issues.add(new ValidationIssue(
+                                "DUPLICATE " + fieldName.toUpperCase(),
+                                String.format("Value '%s' is shared by %d members:", plateValue, holders.size()),
+                                holders));
+                        continue;
+                    }
+                } catch (NumberFormatException ignored) {}
+
+                // Auto-reclaim when one holder is active and the other is stale
+                boolean firstActive  = hasKnownNonStaleExpiry(first,  staleCutoff);
+                boolean secondActive = hasKnownNonStaleExpiry(second, staleCutoff);
+                boolean firstStale   = isLicenceStale(first,  staleCutoff);
+                boolean secondStale  = isLicenceStale(second, staleCutoff);
+
+                if (firstActive && secondStale) {
+                    setter.accept(second, null);
+                    reclaimed.add(new ReclaimedPlate(fieldName, plateValue, first, second));
+                    continue;
+                }
+                if (secondActive && firstStale) {
+                    setter.accept(first, null);
+                    reclaimed.add(new ReclaimedPlate(fieldName, plateValue, second, first));
+                    continue;
+                }
+            }
+
+            issues.add(new ValidationIssue(
+                    "DUPLICATE " + fieldName.toUpperCase(),
+                    String.format("Value '%s' is shared by %d members:", plateValue, holders.size()),
+                    holders));
+        }
+    }
+
+    private boolean isAdultYouthPair(Member a, Member b) {
+        String classA = StringUtils.trimToEmpty(a.getLicenseClass()).toLowerCase();
+        String classB = StringUtils.trimToEmpty(b.getLicenseClass()).toLowerCase();
+        return (classA.equals("adult") && classB.equals("youth"))
+                || (classA.equals("youth") && classB.equals("adult"));
+    }
+
+    private boolean isLicenceStale(Member m, LocalDate cutoff) {
+        String expiry = StringUtils.trimToEmpty(m.getLicenseExpiry());
+        if (expiry.isEmpty()) return false;
+        try {
+            return LocalDate.parse(expiry).isBefore(cutoff);
+        } catch (DateTimeParseException e) {
+            return false;
+        }
+    }
+
+    private boolean hasKnownNonStaleExpiry(Member m, LocalDate cutoff) {
+        String expiry = StringUtils.trimToEmpty(m.getLicenseExpiry());
+        if (expiry.isEmpty()) return false;
+        try {
+            return !LocalDate.parse(expiry).isBefore(cutoff);
+        } catch (DateTimeParseException e) {
+            return false;
+        }
+    }
 
     private boolean namesAreSimilar(Member a, Member b) {
         String fullA = normalizeName(a.getGivenName(), a.getFamilyName());

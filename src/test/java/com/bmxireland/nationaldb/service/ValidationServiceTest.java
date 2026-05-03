@@ -1,8 +1,10 @@
 package com.bmxireland.nationaldb.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.time.LocalDate;
 import java.util.List;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -35,9 +37,24 @@ class ValidationServiceTest {
         return m;
     }
 
+    private Member withLicenseClass(Member m, String licenseClass) {
+        m.setLicenseClass(licenseClass);
+        return m;
+    }
+
     private Member withTransponder20(Member m, String value) {
         m.setTransponder20(value);
         return m;
+    }
+
+    /** Returns an expiry date string for a year that is considered active (not stale). */
+    private String activeExpiry() {
+        return LocalDate.now().getYear() + "-12-31";
+    }
+
+    /** Returns an expiry date string for a year that is considered stale (> 1 year ago). */
+    private String staleExpiry() {
+        return (LocalDate.now().getYear() - 2) + "-12-31";
     }
 
     // ---- validateRaceNumberRange ----
@@ -76,12 +93,12 @@ class ValidationServiceTest {
         Member a = member("LIC001", "Alice", "Smith", "1990-01-01", null, "42", null);
         Member b = member("LIC002", "Bob", "Jones", "1985-06-15", null, "42", null);
 
-        var issues = validationService.validateNoDuplicateRaceNumbers(List.of(a, b));
+        var result = validationService.validateNoDuplicateRaceNumbers(List.of(a, b));
 
-        assertEquals(1, issues.size());
-        assertEquals("DUPLICATE PLATE 20", issues.get(0).category());
-        assertTrue(issues.get(0).affectedMembers().contains(a));
-        assertTrue(issues.get(0).affectedMembers().contains(b));
+        assertEquals(1, result.issues().size());
+        assertEquals("DUPLICATE PLATE 20", result.issues().get(0).category());
+        assertTrue(result.issues().get(0).affectedMembers().contains(a));
+        assertTrue(result.issues().get(0).affectedMembers().contains(b));
     }
 
     @Test
@@ -89,9 +106,9 @@ class ValidationServiceTest {
         Member a = member("LIC001", "Alice", "Smith", "1990-01-01", null, "abc", null);
         Member b = member("LIC002", "Bob", "Jones", "1985-06-15", null, "ABC", null);
 
-        var issues = validationService.validateNoDuplicateRaceNumbers(List.of(a, b));
+        var result = validationService.validateNoDuplicateRaceNumbers(List.of(a, b));
 
-        assertEquals(1, issues.size());
+        assertEquals(1, result.issues().size());
     }
 
     @Test
@@ -100,9 +117,9 @@ class ValidationServiceTest {
         Member b = member("LIC002", "Bob", "Jones", "1985-06-15", null, "", null);
         Member c = member("LIC003", "Carol", "Brown", "2000-03-10", null, "None", null);
 
-        var issues = validationService.validateNoDuplicateRaceNumbers(List.of(a, b, c));
+        var result = validationService.validateNoDuplicateRaceNumbers(List.of(a, b, c));
 
-        assertTrue(issues.isEmpty());
+        assertTrue(result.issues().isEmpty());
     }
 
     @Test
@@ -110,9 +127,81 @@ class ValidationServiceTest {
         Member a = member("LIC001", "Alice", "Smith", "1990-01-01", null, "101", null);
         Member b = member("LIC002", "Bob", "Jones", "1985-06-15", null, "102", null);
 
-        var issues = validationService.validateNoDuplicateRaceNumbers(List.of(a, b));
+        var result = validationService.validateNoDuplicateRaceNumbers(List.of(a, b));
 
-        assertTrue(issues.isEmpty());
+        assertTrue(result.issues().isEmpty());
+    }
+
+    @Test
+    void duplicatePlate20_activeVsStale_plateClearedFromStaleMember() {
+        Member active = member("26U001", "Dylan", "Ross",  "2010-01-01", null, "591", activeExpiry());
+        Member stale  = member("24GB001","Joey",  "Dewis", "2005-01-01", null, "591", staleExpiry());
+
+        var result = validationService.validateNoDuplicateRaceNumbers(List.of(active, stale));
+
+        assertTrue(result.issues().isEmpty());
+        assertEquals(1, result.reclaimed().size());
+        assertNull(stale.getPlate20());
+        assertEquals("591", active.getPlate20());
+        assertEquals(active, result.reclaimed().get(0).activeHolder());
+        assertEquals(stale,  result.reclaimed().get(0).staleMember());
+    }
+
+    @Test
+    void duplicatePlate20_bothActive_reportedAsIssue() {
+        Member a = member("26U001", "Alice", "Smith", "1990-01-01", null, "42", activeExpiry());
+        Member b = member("26U002", "Bob",   "Jones", "1985-06-15", null, "42", activeExpiry());
+
+        var result = validationService.validateNoDuplicateRaceNumbers(List.of(a, b));
+
+        assertEquals(1, result.issues().size());
+        assertTrue(result.reclaimed().isEmpty());
+    }
+
+    @Test
+    void duplicatePlate20_bothStale_reportedAsIssue() {
+        Member a = member("24U001", "Alice", "Smith", "1990-01-01", null, "42", staleExpiry());
+        Member b = member("24U002", "Bob",   "Jones", "1985-06-15", null, "42", staleExpiry());
+
+        var result = validationService.validateNoDuplicateRaceNumbers(List.of(a, b));
+
+        assertEquals(1, result.issues().size());
+        assertTrue(result.reclaimed().isEmpty());
+    }
+
+    @Test
+    void duplicatePlate20_adultVsYouth_suppressed() {
+        Member adult = withLicenseClass(member("26C001", "Tom",   "Priestley", "1990-01-01", null, "700", activeExpiry()), "Adult");
+        Member youth = withLicenseClass(member("26U001", "Daire", "McIntyre",  "2010-01-01", null, "700", activeExpiry()), "Youth");
+
+        var result = validationService.validateNoDuplicateRaceNumbers(List.of(adult, youth));
+
+        assertTrue(result.issues().isEmpty());
+        assertTrue(result.reclaimed().isEmpty());
+    }
+
+    @Test
+    void duplicatePlate20_protectedLifetimePlate_notReclaimed() {
+        Member active = member("26U001", "Dylan", "Ross",  "2010-01-01", null, "99", activeExpiry());
+        Member stale  = member("24GB001","Joey",  "Dewis", "2005-01-01", null, "99", staleExpiry());
+
+        var result = validationService.validateNoDuplicateRaceNumbers(List.of(active, stale));
+
+        assertEquals(1, result.issues().size());
+        assertTrue(result.reclaimed().isEmpty());
+        assertEquals("99", stale.getPlate20()); // plate was NOT cleared
+    }
+
+    @Test
+    void duplicatePlate20_threeHolders_reportedAsIssue() {
+        Member a = member("26U001", "Alice", "Smith", "1990-01-01", null, "42", activeExpiry());
+        Member b = member("26U002", "Bob",   "Jones", "1985-06-15", null, "42", staleExpiry());
+        Member c = member("26U003", "Carol", "Brown", "2000-03-10", null, "42", staleExpiry());
+
+        var result = validationService.validateNoDuplicateRaceNumbers(List.of(a, b, c));
+
+        assertEquals(1, result.issues().size());
+        assertTrue(result.reclaimed().isEmpty());
     }
 
     // ---- validateNoDuplicateTransponderNumbers ----
@@ -308,7 +397,9 @@ class ValidationServiceTest {
 
     @Test
     void emptyMemberList_producesNoIssues() {
-        assertTrue(validationService.validateAll(List.of()).isEmpty());
+        var result = validationService.validateAll(List.of());
+        assertTrue(result.issues().isEmpty());
+        assertTrue(result.reclaimed().isEmpty());
     }
 
     // ---- validateLicenseExpiryMatchesLicenseYear ----

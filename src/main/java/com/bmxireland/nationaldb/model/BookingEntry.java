@@ -10,7 +10,7 @@ public record BookingEntry(
         String gender,
         String dateOfBirth,        // YYYY-MM-DD (normalised from d/M/yyyy on load)
         String licenseNumber,      // CI Licence Number
-        String memberId,           // CI mid
+        String memberId,           // CI mid (domestic CI member ID)
         String clubName,           // CI Club
         String riderCategory,      // CI Rider Category
         String ageGroupYouth,      // Age Group Youth (mutually exclusive with ageGroupAdult)
@@ -20,5 +20,6 @@ public record BookingEntry(
         String emergencyContactName,
         String emergencyContactPhone,
         String email,
-        String mobile
+        String mobile,
+        String uciId               // UCI ID (10-digit international UCI identifier)
 ) {}

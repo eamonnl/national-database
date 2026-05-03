@@ -27,7 +27,7 @@ class EventMasterServiceTest {
         databaseService = mock(DatabaseService.class);
         when(databaseService.resolveClubName(anyString())).thenAnswer(i -> i.getArgument(0));
         when(databaseService.normalizePhoneNumber(anyString())).thenAnswer(i -> i.getArgument(0));
-        service = new EventMasterService(databaseService);
+        service = new EventMasterService(databaseService, new MemberMatcherFactory());
     }
 
     // ---- Helpers ----
@@ -38,7 +38,7 @@ class EventMasterServiceTest {
                                String raceNumber, String transponder) {
         return new BookingEntry(firstName, lastName, gender, dob, licenceNumber, null, clubName,
                 riderCategory, ageGroupYouth, ageGroupAdult, raceNumber, transponder,
-                null, null, null, null);
+                null, null, null, null, null);
     }
 
     /** Returns a DOB string for a rider who turns the given age in the current calendar year. */
@@ -158,6 +158,18 @@ class EventMasterServiceTest {
         service.importBookings(members, List.of(e));
 
         assertNull(members.get(0).getTransponder20());
+    }
+
+    @Test
+    void importBookings_newMember_licenseExpiryDefaultsToEndOfCurrentYear() {
+        List<Member> members = new ArrayList<>();
+        BookingEntry e = entry("26U001", "Alice", "Smith", "Female", "2010-05-01",
+                "Cork BMX", null, "Female 15+", null, null, null);
+
+        service.importBookings(members, List.of(e));
+
+        String expectedExpiry = java.time.LocalDate.now().getYear() + "-12-31";
+        assertEquals(expectedExpiry, members.get(0).getLicenseExpiry());
     }
 
     // ---- importBookings — existing member backfill ----

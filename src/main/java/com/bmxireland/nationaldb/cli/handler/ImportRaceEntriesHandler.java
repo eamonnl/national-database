@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Scanner;
-import java.util.stream.Stream;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -82,23 +81,40 @@ public class ImportRaceEntriesHandler implements MenuHandler {
             }
         }
 
-        System.out.println("\n  ── Existing members updated (plate / transponder backfill) ──");
-        if (importResult.updated().isEmpty()) {
+        List<BookingImportResult.UpdatedMember> licenceUpdated = importResult.updated().stream()
+                .filter(u -> u.oldLicenseNumber() != null).toList();
+        List<BookingImportResult.UpdatedMember> backfilled = importResult.updated().stream()
+                .filter(u -> u.oldLicenseNumber() == null).toList();
+
+        System.out.println("\n  ── Licence number updated (matched by MID / name + DOB) ──");
+        if (licenceUpdated.isEmpty()) {
             System.out.println("    None.");
         } else {
-            for (BookingImportResult.UpdatedMember u : importResult.updated()) {
+            for (BookingImportResult.UpdatedMember u : licenceUpdated) {
                 Member m = u.member();
-                String plateInfo       = u.updatedPlate()       != null ? "plate=" + u.updatedPlate()       : "";
-                String transponderInfo = u.updatedTransponder() != null ? "transponder=" + u.updatedTransponder() : "";
-                String changes = String.join(", ",
-                        Stream.of(plateInfo, transponderInfo).filter(s -> !s.isEmpty()).toList());
-                System.out.printf("    %-25s  [%s]  %s%n",
-                        m.getGivenName() + " " + m.getFamilyName(), m.getLicenseNumber(), changes);
+                String equipment = formatEquipmentChanges(u);
+                System.out.printf("    %-25s  %s → [%s]  via %s%s%n",
+                        m.getGivenName() + " " + m.getFamilyName(),
+                        u.oldLicenseNumber(), m.getLicenseNumber(),
+                        u.matchMethod(),
+                        equipment.isEmpty() ? "" : "  (" + equipment + ")");
             }
         }
 
-        System.out.printf("%n  Done. %d added, %d updated.%n",
-                importResult.added().size(), importResult.updated().size());
+        System.out.println("\n  ── Existing members updated (plate / transponder backfill) ──");
+        if (backfilled.isEmpty()) {
+            System.out.println("    None.");
+        } else {
+            for (BookingImportResult.UpdatedMember u : backfilled) {
+                Member m = u.member();
+                System.out.printf("    %-25s  [%s]  %s%n",
+                        m.getGivenName() + " " + m.getFamilyName(),
+                        m.getLicenseNumber(), formatEquipmentChanges(u));
+            }
+        }
+
+        System.out.printf("%n  Done. %d added, %d licence(s) updated, %d backfilled.%n",
+                importResult.added().size(), licenceUpdated.size(), backfilled.size());
 
         if (!importResult.added().isEmpty() || !importResult.updated().isEmpty()) {
             session.markChanged();
@@ -139,6 +155,13 @@ public class ImportRaceEntriesHandler implements MenuHandler {
         }
 
         System.out.println("═════════════════════════════════════════════════════════════════");
+    }
+
+    private String formatEquipmentChanges(BookingImportResult.UpdatedMember u) {
+        String plate       = u.updatedPlate()       != null ? "plate=" + u.updatedPlate()             : "";
+        String transponder = u.updatedTransponder() != null ? "transponder=" + u.updatedTransponder() : "";
+        if (!plate.isEmpty() && !transponder.isEmpty()) return plate + ", " + transponder;
+        return plate.isEmpty() ? transponder : plate;
     }
 
     /**
