@@ -32,6 +32,11 @@ public class DivisionLookupClassStrategy implements RaceClassStrategy {
 
     @Override
     public ClassResolution resolve(BookingEntry entry, Member member) {
+        // Adults always race in M1 (Rhythm Masters) regardless of club ability divisions
+        if (entry.ageGroupAdult() != null && !entry.ageGroupAdult().isBlank()) {
+            return new ClassResolution(ClubDivision.M1.divisionName(), null);
+        }
+
         // Try EventMaster name first, then member database name
         String division = lookupByName(entry.firstName(), entry.lastName());
         if (division == null && member != null) {
