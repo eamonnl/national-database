@@ -34,9 +34,10 @@ public class MemberService {
 
     // ---- Result types ----
 
-    public record BulkUpdateResult(List<AppliedUpdate> applied, List<SkippedEntry> skipped) {
+    public record BulkUpdateResult(List<AppliedUpdate> applied, List<SkippedEntry> skipped, List<UnchangedEntry> unchanged) {
         public record AppliedUpdate(Member member, String oldValue, String newValue) {}
         public record SkippedEntry(String input, String reason, List<Member> matches) {}
+        public record UnchangedEntry(Member member, String value) {}
     }
 
     public record AvailableNumbersResult(
@@ -93,8 +94,9 @@ public class MemberService {
      * Entries that cannot be uniquely matched are recorded as skipped with a reason.
      */
     public BulkUpdateResult bulkUpdatePlate20(List<Member> members, List<String> inputLines) {
-        List<BulkUpdateResult.AppliedUpdate> applied = new ArrayList<>();
-        List<BulkUpdateResult.SkippedEntry> skipped  = new ArrayList<>();
+        List<BulkUpdateResult.AppliedUpdate> applied    = new ArrayList<>();
+        List<BulkUpdateResult.SkippedEntry> skipped     = new ArrayList<>();
+        List<BulkUpdateResult.UnchangedEntry> unchanged = new ArrayList<>();
 
         for (String line : inputLines) {
             if (line == null || line.isBlank()) continue;
@@ -142,12 +144,16 @@ public class MemberService {
             } else {
                 Member target  = matches.get(0);
                 String oldValue = databaseService.getFieldValue(target, BULK_UPDATE_FIELD);
+                if (plateNumber.equals(oldValue)) {
+                    unchanged.add(new BulkUpdateResult.UnchangedEntry(target, plateNumber));
+                    continue;
+                }
                 databaseService.updateMemberField(target, BULK_UPDATE_FIELD, plateNumber);
                 applied.add(new BulkUpdateResult.AppliedUpdate(target, oldValue, plateNumber));
             }
         }
 
-        return new BulkUpdateResult(applied, skipped);
+        return new BulkUpdateResult(applied, skipped, unchanged);
     }
 
     /**

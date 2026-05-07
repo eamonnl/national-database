@@ -17,8 +17,10 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 import org.apache.commons.lang3.StringUtils;
@@ -93,9 +95,11 @@ public class EventMasterService {
     }
 
     public record SqorzExportResult(int entriesWritten, String outputPath,
-                                    List<ClassMismatchWarning> classMismatches) {
+                                    List<ClassMismatchWarning> classMismatches,
+                                    List<DuplicateEntryWarning> duplicateEntries) {
         public record ClassMismatchWarning(String licenseNumber, String name,
                                            String eventMasterClass, String dobDerivedClass) {}
+        public record DuplicateEntryWarning(String licenseNumber, String name, String sqorzClass) {}
     }
 
     // ---- Public operations ----
@@ -297,6 +301,8 @@ public class EventMasterService {
 
         Map<String, Member> byLicense = buildLicenseIndex(members);
         List<SqorzExportResult.ClassMismatchWarning> warnings = new ArrayList<>();
+        List<SqorzExportResult.DuplicateEntryWarning> duplicates = new ArrayList<>();
+        Set<String> seenLicenseClass = new HashSet<>();
 
         List<String> headerLines = readTemplateHeader();
         String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
@@ -345,6 +351,17 @@ public class EventMasterService {
                             memberName, member.getLicenseNumber(), resolution.supersededClass(), sqorzClass);
                 }
 
+                // Duplicate detection: same rider in the same class may only appear once
+                String dedupKey = member.getLicenseNumber().toUpperCase() + "|" + StringUtils.defaultString(sqorzClass);
+                if (!seenLicenseClass.add(dedupKey)) {
+                    String memberName = member.getGivenName() + " " + member.getFamilyName();
+                    duplicates.add(new SqorzExportResult.DuplicateEntryWarning(
+                            member.getLicenseNumber(), memberName, sqorzClass));
+                    log.warn("Duplicate entry suppressed for {} [{}] in class '{}'",
+                            memberName, member.getLicenseNumber(), sqorzClass);
+                    continue;
+                }
+
                 out.println(toCsvRow(
                         member.getLicenseNumber(),
                         member.getLicenseClass(),
@@ -376,7 +393,7 @@ public class EventMasterService {
         }
 
         log.info("Sqorz CSV written to: {} ({} rows)", csvPath, written);
-        return new SqorzExportResult(written, csvPath, warnings);
+        return new SqorzExportResult(written, csvPath, warnings, duplicates);
     }
 
     // ---- Package-private helpers (used directly in tests) ----
@@ -437,6 +454,7 @@ public class EventMasterService {
         if (licenseClass == null) licenseClass = MemberService.licenseClassFromDob(entry.dateOfBirth());
         m.setLicenseClass(licenseClass);
 
+        m.setLicenseCountryCode("IRL");
         m.setClubName(databaseService.resolveClubName(entry.clubName()));
 
         if (isValidPlate(entry.bmxRaceNumber())) {

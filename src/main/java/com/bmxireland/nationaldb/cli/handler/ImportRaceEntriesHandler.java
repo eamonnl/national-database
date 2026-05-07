@@ -140,6 +140,15 @@ public class ImportRaceEntriesHandler implements MenuHandler {
                 }
             }
 
+            if (!exportResult.duplicateEntries().isEmpty()) {
+                System.out.printf("%n  WARNING: %d duplicate entry(s) suppressed — one entry written per rider per class:%n",
+                        exportResult.duplicateEntries().size());
+                for (SqorzExportResult.DuplicateEntryWarning w : exportResult.duplicateEntries()) {
+                    System.out.printf("    %-25s  [%s]  Class: %s%n",
+                            w.name(), w.licenseNumber(), w.sqorzClass());
+                }
+            }
+
             if (classStrategy instanceof DivisionLookupClassStrategy lookup
                     && !lookup.getUnmatchedRiders().isEmpty()) {
                 System.out.printf("%n  WARNING: %d rider(s) not found in division file — assigned %s (manual assignment required):%n",

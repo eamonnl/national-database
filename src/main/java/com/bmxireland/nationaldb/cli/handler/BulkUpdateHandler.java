@@ -61,6 +61,10 @@ public class BulkUpdateHandler implements MenuHandler {
                     u.member().getGivenName(), u.member().getFamilyName(),
                     u.member().getLicenseNumber(), u.newValue());
         }
+        for (BulkUpdateResult.UnchangedEntry u : result.unchanged()) {
+            System.out.printf("  Unchanged %-28s Plate 20 already '%s'%n",
+                    u.member().getGivenName() + " " + u.member().getFamilyName(), u.value());
+        }
         for (BulkUpdateResult.SkippedEntry s : result.skipped()) {
             System.out.printf("  ERROR: %s — input: '%s'%n", s.reason(), s.input());
             if (!s.matches().isEmpty()) {
@@ -68,8 +72,8 @@ public class BulkUpdateHandler implements MenuHandler {
             }
             log.error("Bulk update skipped: {} — input: '{}'", s.reason(), s.input());
         }
-        System.out.printf("  Done. %d updated, %d skipped.%n",
-                result.applied().size(), result.skipped().size());
+        System.out.printf("  Done. %d updated, %d unchanged, %d skipped.%n",
+                result.applied().size(), result.unchanged().size(), result.skipped().size());
 
         if (!result.applied().isEmpty()) {
             session.markChanged();
