@@ -247,6 +247,7 @@ public class MemberService {
                 match.setLicenseNumber(entry.licenseNumber());
                 match.setLicenseExpiry(entry.expiryDate());
                 match.setActive("Yes");
+                match.setClubName(entry.club());
 
                 String riderCat = (entry.riderCategory() != null && !entry.riderCategory().isBlank())
                         ? entry.riderCategory() : entry.category();
