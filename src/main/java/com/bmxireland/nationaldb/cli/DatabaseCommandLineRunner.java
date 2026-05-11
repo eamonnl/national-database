@@ -17,6 +17,7 @@ import com.bmxireland.nationaldb.cli.handler.ImportRegistrationHandler;
 import com.bmxireland.nationaldb.cli.handler.ListMembersHandler;
 import com.bmxireland.nationaldb.cli.handler.SaveDatabaseHandler;
 import com.bmxireland.nationaldb.cli.handler.SearchHandler;
+import com.bmxireland.nationaldb.cli.handler.SqorzMemberChangesHandler;
 import com.bmxireland.nationaldb.cli.handler.UpdateHandler;
 import com.bmxireland.nationaldb.cli.handler.ValidationHandler;
 import com.bmxireland.nationaldb.service.DatabaseService;
@@ -47,6 +48,7 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
             AvailableNumbersHandler availableNumbersHandler,
             ImportRegistrationHandler importRegistrationHandler,
             ImportRaceEntriesHandler importRaceEntriesHandler,
+            SqorzMemberChangesHandler sqorzMemberChangesHandler,
             SaveDatabaseHandler saveDatabaseHandler) {
 
         this.databaseService    = databaseService;
@@ -63,7 +65,8 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
         menuHandlers.put("6",  availableNumbersHandler);
         menuHandlers.put("7",  importRegistrationHandler);
         menuHandlers.put("8",  importRaceEntriesHandler);
-        menuHandlers.put("9",  saveDatabaseHandler);
+        menuHandlers.put("9",  sqorzMemberChangesHandler);
+        menuHandlers.put("10", saveDatabaseHandler);
     }
 
     @Override
@@ -89,10 +92,10 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
             MenuHandler handler = menuHandlers.get(choice);
             if (handler != null) {
                 handler.handle(scanner);
-            } else if ("10".equals(choice)) {
+            } else if ("11".equals(choice)) {
                 running = confirmExit(scanner);
             } else {
-                System.out.println("Invalid option. Please enter 1-10.");
+                System.out.println("Invalid option. Please enter 1-11.");
             }
         }
 
@@ -110,8 +113,9 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
         System.out.println("  6. Available Race Numbers");
         System.out.println("  7. Import Registration File");
         System.out.println("  8. Import Race Entries (EventMaster)");
-        System.out.println("  9. Save Database");
-        System.out.println(" 10. Exit");
+        System.out.println("  9. Incorporate Sqorz Member Changes");
+        System.out.println(" 10. Save Database");
+        System.out.println(" 11. Exit");
         if (session.hasUnsavedChanges()) {
             System.out.println("  ** Unsaved changes pending **");
         }
