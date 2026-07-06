@@ -277,6 +277,256 @@ class MemberServiceTest {
         assertDoesNotThrow(() -> memberService.getAvailableRaceNumbers(members, "Plate 20"));
     }
 
+    // ---- unassignedRanges ----
+
+    @Test
+    void unassignedRanges_groupsConsecutiveNumbersIntoOneRange() {
+        // 150 assigned splits the 101-170 span into two gaps: 101-149 and 151-170
+        List<Member> members = List.of(
+                member("LIC001", "Alice", "Smith", "150", "2029-12-31")
+        );
+
+        var result = memberService.getAvailableRaceNumbers(members, "Plate 20");
+        var ranges = result.unassignedRanges();
+
+        assertTrue(ranges.contains(new MemberService.AvailableNumbersResult.NumberRange(101, 149)));
+        assertTrue(ranges.stream().noneMatch(r -> r.start() <= 150 && r.end() >= 150));
+    }
+
+    @Test
+    void unassignedRanges_singleGapNumberIsSizeOneRange() {
+        // Everything from 101 upward is assigned except 150 itself
+        List<Member> members = new ArrayList<>();
+        for (int n = 101; n <= 170; n++) {
+            if (n == 150) continue;
+            members.add(member("LIC" + n, "Rider", "" + n, String.valueOf(n), "2029-12-31"));
+        }
+
+        var result = memberService.getAvailableRaceNumbers(members, "Plate 20");
+        var ranges = result.unassignedRanges();
+
+        assertTrue(ranges.contains(new MemberService.AvailableNumbersResult.NumberRange(150, 150)));
+        assertEquals(1, ranges.stream().filter(r -> r.start() == 150).findFirst().get().size());
+    }
+
+    @Test
+    void unassignedRanges_noneUnassigned_returnsEmptyList() {
+        var result = new MemberService.AvailableNumbersResult(
+                "Plate 20", LocalDate.now(), List.of(), List.of(), 120);
+
+        assertTrue(result.unassignedRanges().isEmpty());
+    }
+
+    // ---- reclaimNumbers ----
+
+    @Test
+    void reclaimNumbers_clearsFieldOnStaleAssignments() {
+        List<Member> members = List.of(
+                member("LIC001", "Alice", "Smith", "150", "2020-01-01") // stale
+        );
+
+        var result = memberService.getAvailableRaceNumbers(members, "Plate 20");
+        memberService.reclaimNumbers(result.reclaimable(), "Plate 20");
+
+        assertNull(members.get(0).getPlate20());
+    }
+
+    @Test
+    void reclaimNumbers_reclaimedNumberBecomesUnassigned() {
+        List<Member> members = new ArrayList<>(List.of(
+                member("LIC001", "Alice", "Smith", "150", "2020-01-01"), // stale, to be reclaimed
+                member("LIC002", "Bob",   "Jones", "300", "2029-12-31")  // active, keeps range covering 150
+        ));
+
+        var before = memberService.getAvailableRaceNumbers(members, "Plate 20");
+        memberService.reclaimNumbers(before.reclaimable(), "Plate 20");
+
+        var after = memberService.getAvailableRaceNumbers(members, "Plate 20");
+        assertTrue(after.reclaimable().isEmpty());
+        assertTrue(after.unassigned().contains(150));
+    }
+
+    // ---- parseAllocationRequests ----
+
+    private static final String SAMPLE_EMAIL =
+            "The BMX Application Form form was submitted on your website:\n" +
+            "\n" +
+            "Form Details\n" +
+            "Rider Name: Joshua ciurea\n" +
+            "Rider Email: ciureaviorel18@gmail.com\n" +
+            "Rider Age: 6\n" +
+            "Rider Gender: Male\n" +
+            "Rider DOB: 2020-04-04\n" +
+            "Rider Club: Lucan bmx\n" +
+            "Cycling Ireland License Number: 26U80010\n";
+
+    @Test
+    void parseAllocationRequests_singleEmail_parsesAllFields() {
+        var requests = MemberService.parseAllocationRequests(SAMPLE_EMAIL);
+
+        assertEquals(1, requests.size());
+        var r = requests.get(0);
+        assertEquals("Joshua ciurea", r.riderName());
+        assertEquals("ciureaviorel18@gmail.com", r.riderEmail());
+        assertEquals("6", r.riderAge());
+        assertEquals("Male", r.riderGender());
+        assertEquals("2020-04-04", r.riderDob());
+        assertEquals("Lucan bmx", r.riderClub());
+        assertEquals("26U80010", r.licenseNumber());
+    }
+
+    @Test
+    void parseAllocationRequests_multipleEmailsPasted_splitsOnRiderName() {
+        String pasted = SAMPLE_EMAIL + "\n" + SAMPLE_EMAIL.replace("Joshua ciurea", "Alice Smith")
+                .replace("26U80010", "26U80011");
+
+        var requests = MemberService.parseAllocationRequests(pasted);
+
+        assertEquals(2, requests.size());
+        assertEquals("Joshua ciurea", requests.get(0).riderName());
+        assertEquals("Alice Smith", requests.get(1).riderName());
+        assertEquals("26U80011", requests.get(1).licenseNumber());
+    }
+
+    @Test
+    void parseAllocationRequests_blankInput_returnsEmptyList() {
+        assertTrue(MemberService.parseAllocationRequests("").isEmpty());
+    }
+
+    // ---- allocateRaceNumbers ----
+
+    private MemberService.AllocationRequest allocationRequest(String name, String license) {
+        return new MemberService.AllocationRequest(name, "x@example.com", "6", "Male", "2020-04-04", "Lucan bmx", license);
+    }
+
+    @Test
+    void allocateRaceNumbers_exactLicenseMatch_allocatesLowestAvailable() {
+        List<Member> members = List.of(
+                member("26U80010", "Joshua", "Ciurea", null, "2029-12-31")
+        );
+        var requests = List.of(allocationRequest("Joshua ciurea", "26U80010"));
+
+        var result = memberService.allocateRaceNumbers(members, requests, "Plate 20");
+
+        assertEquals(1, result.allocated().size());
+        assertEquals(101, result.allocated().get(0).plateNumber());
+        assertEquals("Ciurea", result.allocated().get(0).member().getFamilyName());
+        assertTrue(result.skipped().isEmpty());
+    }
+
+    @Test
+    void allocateRaceNumbers_licenseMatchIsCaseInsensitive() {
+        List<Member> members = List.of(
+                member("26u80010", "Joshua", "Ciurea", null, "2029-12-31")
+        );
+        var requests = List.of(allocationRequest("Joshua ciurea", "26U80010"));
+
+        var result = memberService.allocateRaceNumbers(members, requests, "Plate 20");
+
+        assertEquals(1, result.allocated().size());
+    }
+
+    @Test
+    void allocateRaceNumbers_noLicenseNumber_isSkipped() {
+        List<Member> members = List.of(
+                member("26U80010", "Joshua", "Ciurea", null, "2029-12-31")
+        );
+        var requests = List.of(allocationRequest("Joshua ciurea", null));
+
+        var result = memberService.allocateRaceNumbers(members, requests, "Plate 20");
+
+        assertTrue(result.allocated().isEmpty());
+        assertEquals(1, result.skipped().size());
+        assertTrue(result.skipped().get(0).reason().contains("No licence number"));
+    }
+
+    @Test
+    void allocateRaceNumbers_licenseNotInDatabase_isSkipped() {
+        List<Member> members = List.of(
+                member("26U80010", "Joshua", "Ciurea", null, "2029-12-31")
+        );
+        var requests = List.of(allocationRequest("Unknown Rider", "99U99999"));
+
+        var result = memberService.allocateRaceNumbers(members, requests, "Plate 20");
+
+        assertTrue(result.allocated().isEmpty());
+        assertEquals(1, result.skipped().size());
+        assertTrue(result.skipped().get(0).reason().contains("not found in database"));
+    }
+
+    @Test
+    void allocateRaceNumbers_riderAlreadyHasNumber_isSkipped() {
+        List<Member> members = List.of(
+                member("26U80010", "Joshua", "Ciurea", "205", "2029-12-31")
+        );
+        var requests = List.of(allocationRequest("Joshua ciurea", "26U80010"));
+
+        var result = memberService.allocateRaceNumbers(members, requests, "Plate 20");
+
+        assertTrue(result.allocated().isEmpty());
+        assertEquals(1, result.skipped().size());
+        assertTrue(result.skipped().get(0).reason().contains("already assigned"));
+    }
+
+    @Test
+    void allocateRaceNumbers_duplicateRequestForSameRider_secondIsSkipped() {
+        List<Member> members = List.of(
+                member("26U80010", "Joshua", "Ciurea", null, "2029-12-31")
+        );
+        var requests = List.of(
+                allocationRequest("Joshua ciurea", "26U80010"),
+                allocationRequest("Joshua ciurea", "26U80010"));
+
+        var result = memberService.allocateRaceNumbers(members, requests, "Plate 20");
+
+        assertEquals(1, result.allocated().size());
+        assertEquals(1, result.skipped().size());
+        assertTrue(result.skipped().get(0).reason().contains("Duplicate request"));
+    }
+
+    @Test
+    void allocateRaceNumbers_multipleRequests_getConsecutiveNumbers() {
+        List<Member> members = new ArrayList<>(List.of(
+                member("26U80010", "Joshua", "Ciurea", null, "2029-12-31"),
+                member("26U80011", "Alice",  "Smith",  null, "2029-12-31")
+        ));
+        var requests = List.of(
+                allocationRequest("Joshua ciurea", "26U80010"),
+                allocationRequest("Alice Smith", "26U80011"));
+
+        var result = memberService.allocateRaceNumbers(members, requests, "Plate 20");
+
+        assertEquals(101, result.allocated().get(0).plateNumber());
+        assertEquals(102, result.allocated().get(1).plateNumber());
+    }
+
+    @Test
+    void allocateRaceNumbers_doesNotMutateMembers() {
+        List<Member> members = List.of(
+                member("26U80010", "Joshua", "Ciurea", null, "2029-12-31")
+        );
+        var requests = List.of(allocationRequest("Joshua ciurea", "26U80010"));
+
+        memberService.allocateRaceNumbers(members, requests, "Plate 20");
+
+        assertNull(members.get(0).getPlate20());
+    }
+
+    // ---- applyAllocations ----
+
+    @Test
+    void applyAllocations_writesPlateNumberOntoMember() {
+        List<Member> members = List.of(
+                member("26U80010", "Joshua", "Ciurea", null, "2029-12-31")
+        );
+        var requests = List.of(allocationRequest("Joshua ciurea", "26U80010"));
+        var result = memberService.allocateRaceNumbers(members, requests, "Plate 20");
+
+        memberService.applyAllocations(result.allocated(), "Plate 20");
+
+        assertEquals("101", members.get(0).getPlate20());
+    }
+
     // ---- isLicenseStale ----
 
     @Test

@@ -7,9 +7,14 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.stream.Collectors;
 
@@ -48,9 +53,51 @@ public class MemberService {
             int maxRange) {
         public record StaleAssignment(int plateNumber, Member member) {}
 
+        /** An inclusive contiguous run of unassigned numbers, e.g. 101-105. */
+        public record NumberRange(int start, int end) {
+            public int size() { return end - start + 1; }
+        }
+
         public int totalAvailable() {
             return reclaimable.size() + unassigned.size();
         }
+
+        /**
+         * Groups {@link #unassigned()} into contiguous inclusive ranges, since race
+         * numbers are usually allocated to riders in blocks. Relies on unassigned
+         * being sorted ascending with no duplicates, which getAvailableRaceNumbers
+         * guarantees.
+         */
+        public List<NumberRange> unassignedRanges() {
+            List<NumberRange> ranges = new ArrayList<>();
+            int i = 0;
+            while (i < unassigned.size()) {
+                int start = unassigned.get(i);
+                int end = start;
+                while (i + 1 < unassigned.size() && unassigned.get(i + 1) == end + 1) {
+                    i++;
+                    end = unassigned.get(i);
+                }
+                ranges.add(new NumberRange(start, end));
+                i++;
+            }
+            return ranges;
+        }
+    }
+
+    /** A single "BMX Application Form" email, parsed into its fields. */
+    public record AllocationRequest(
+            String riderName,
+            String riderEmail,
+            String riderAge,
+            String riderGender,
+            String riderDob,
+            String riderClub,
+            String licenseNumber) {}
+
+    public record AllocationResult(List<Allocated> allocated, List<SkippedRequest> skipped) {
+        public record Allocated(AllocationRequest request, Member member, int plateNumber) {}
+        public record SkippedRequest(AllocationRequest request, String reason) {}
     }
 
     // ---- Public operations ----
@@ -195,6 +242,124 @@ public class MemberService {
         }
 
         return new AvailableNumbersResult(fieldName, cutoff, reclaimable, unassigned, maxRange);
+    }
+
+    /**
+     * Clears the given field for each stale assignment, freeing those numbers for
+     * reassignment. Callers typically pass {@code AvailableNumbersResult.reclaimable()}.
+     */
+    public void reclaimNumbers(List<AvailableNumbersResult.StaleAssignment> assignments, String fieldName) {
+        for (AvailableNumbersResult.StaleAssignment assignment : assignments) {
+            databaseService.updateMemberField(assignment.member(), fieldName, null);
+        }
+    }
+
+    private static final Map<String, String> ALLOCATION_FIELD_LABELS = Map.of(
+            "rider name", "name",
+            "rider email", "email",
+            "rider age", "age",
+            "rider gender", "gender",
+            "rider dob", "dob",
+            "rider club", "club",
+            "cycling ireland license number", "license");
+
+    /**
+     * Parses one or more pasted "BMX Application Form" email bodies into requests.
+     * A new request starts at each "Rider Name:" line; unrecognised lines (email
+     * boilerplate, blank lines) are ignored.
+     */
+    public static List<AllocationRequest> parseAllocationRequests(String rawText) {
+        List<AllocationRequest> requests = new ArrayList<>();
+        Map<String, String> fields = new HashMap<>();
+
+        for (String line : rawText.split("\\R")) {
+            int sep = line.indexOf(':');
+            if (sep == -1) continue;
+            String key = ALLOCATION_FIELD_LABELS.get(line.substring(0, sep).trim().toLowerCase());
+            if (key == null) continue;
+            String value = line.substring(sep + 1).trim();
+
+            if (key.equals("name") && !fields.isEmpty()) {
+                requests.add(toAllocationRequest(fields));
+                fields = new HashMap<>();
+            }
+            fields.put(key, value);
+        }
+        if (!fields.isEmpty()) {
+            requests.add(toAllocationRequest(fields));
+        }
+        return requests;
+    }
+
+    private static AllocationRequest toAllocationRequest(Map<String, String> fields) {
+        return new AllocationRequest(
+                fields.get("name"), fields.get("email"), fields.get("age"),
+                fields.get("gender"), fields.get("dob"), fields.get("club"),
+                fields.get("license"));
+    }
+
+    /**
+     * Matches each request to an existing member by exact (case-insensitive) licence
+     * number and proposes the next available number, lowest first, for each match.
+     * Does not mutate any member — pair with {@link #applyAllocations} to commit.
+     * A request is skipped, rather than allocated, when: it has no licence number;
+     * the licence number matches no member; the member already has a value in
+     * fieldName; or a duplicate request in this same batch already claimed the
+     * member's next number; or the available-number pool is exhausted.
+     */
+    public AllocationResult allocateRaceNumbers(List<Member> members, List<AllocationRequest> requests, String fieldName) {
+        Map<String, Member> byLicense = new HashMap<>();
+        for (Member m : members) {
+            if (StringUtils.isNotBlank(m.getLicenseNumber())) {
+                byLicense.put(m.getLicenseNumber().trim().toUpperCase(), m);
+            }
+        }
+
+        Deque<Integer> pool = new ArrayDeque<>(getAvailableRaceNumbers(members, fieldName).unassigned());
+        Set<Member> claimed = new HashSet<>();
+
+        List<AllocationResult.Allocated> allocated = new ArrayList<>();
+        List<AllocationResult.SkippedRequest> skipped = new ArrayList<>();
+
+        for (AllocationRequest request : requests) {
+            if (StringUtils.isBlank(request.licenseNumber())) {
+                skipped.add(new AllocationResult.SkippedRequest(request, "No licence number provided"));
+                continue;
+            }
+            Member member = byLicense.get(request.licenseNumber().trim().toUpperCase());
+            if (member == null) {
+                skipped.add(new AllocationResult.SkippedRequest(request,
+                        "Licence number '" + request.licenseNumber() + "' not found in database"));
+                continue;
+            }
+            if (!claimed.add(member)) {
+                skipped.add(new AllocationResult.SkippedRequest(request,
+                        "Duplicate request for this rider in this batch"));
+                continue;
+            }
+            String existing = databaseService.getFieldValue(member, fieldName);
+            if (StringUtils.isNotBlank(existing)) {
+                skipped.add(new AllocationResult.SkippedRequest(request,
+                        fieldName + " already assigned: " + existing));
+                continue;
+            }
+            if (pool.isEmpty()) {
+                skipped.add(new AllocationResult.SkippedRequest(request, "No available numbers remaining"));
+                continue;
+            }
+            allocated.add(new AllocationResult.Allocated(request, member, pool.pollFirst()));
+        }
+
+        return new AllocationResult(allocated, skipped);
+    }
+
+    /**
+     * Writes the proposed allocations from {@link #allocateRaceNumbers} to the member list.
+     */
+    public void applyAllocations(List<AllocationResult.Allocated> allocated, String fieldName) {
+        for (AllocationResult.Allocated a : allocated) {
+            databaseService.updateMemberField(a.member(), fieldName, String.valueOf(a.plateNumber()));
+        }
     }
 
     /**

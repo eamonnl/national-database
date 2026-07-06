@@ -10,6 +10,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 
+import com.bmxireland.nationaldb.cli.handler.AllocateNumbersHandler;
 import com.bmxireland.nationaldb.cli.handler.AvailableNumbersHandler;
 import com.bmxireland.nationaldb.cli.handler.BulkUpdateHandler;
 import com.bmxireland.nationaldb.cli.handler.ImportRaceEntriesHandler;
@@ -49,7 +50,8 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
             ImportRegistrationHandler importRegistrationHandler,
             ImportRaceEntriesHandler importRaceEntriesHandler,
             SqorzMemberChangesHandler sqorzMemberChangesHandler,
-            SaveDatabaseHandler saveDatabaseHandler) {
+            SaveDatabaseHandler saveDatabaseHandler,
+            AllocateNumbersHandler allocateNumbersHandler) {
 
         this.databaseService    = databaseService;
         this.session            = session;
@@ -67,6 +69,7 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
         menuHandlers.put("8",  importRaceEntriesHandler);
         menuHandlers.put("9",  sqorzMemberChangesHandler);
         menuHandlers.put("10", saveDatabaseHandler);
+        menuHandlers.put("11", allocateNumbersHandler);
     }
 
     @Override
@@ -92,10 +95,10 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
             MenuHandler handler = menuHandlers.get(choice);
             if (handler != null) {
                 handler.handle(scanner);
-            } else if ("11".equals(choice)) {
+            } else if ("12".equals(choice)) {
                 running = confirmExit(scanner);
             } else {
-                System.out.println("Invalid option. Please enter 1-11.");
+                System.out.println("Invalid option. Please enter 1-12.");
             }
         }
 
@@ -109,13 +112,14 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
         System.out.println("  2. Update Member");
         System.out.println("  3. Re-run Validation");
         System.out.println("  4. List All Members");
-        System.out.println("  5. Bulk Update Race Numbers (Plate 20)");
+        System.out.println("  5. Update Race Numbers");
         System.out.println("  6. Available Race Numbers");
-        System.out.println("  7. Import Registration File");
+        System.out.println("  7. Import Registration File (CI)");
         System.out.println("  8. Import Race Entries (EventMaster)");
         System.out.println("  9. Incorporate Sqorz Member Changes");
         System.out.println(" 10. Save Database");
-        System.out.println(" 11. Exit");
+        System.out.println(" 11. Allocate Race Numbers");
+        System.out.println(" 12. Exit");
         if (session.hasUnsavedChanges()) {
             System.out.println("  ** Unsaved changes pending **");
         }

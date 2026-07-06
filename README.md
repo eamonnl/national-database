@@ -5,7 +5,7 @@ A command-line tool for managing the BMX Ireland national member database. It is
 Key capabilities:
 
 - **Import registrations** — load a Cycling Ireland export file and automatically match entries to existing members (by MID, licence number, or name + date of birth). New members are created; returning members have their licence number and details updated.
-- **Assign race numbers** — bulk-assign Plate 20 numbers from a pasted list, and view which numbers are unassigned or reclaimable from lapsed members.
+- **Assign race numbers** — bulk-assign Plate 20 numbers from a pasted list, allocate numbers to new application-form riders, and view/reclaim numbers that are unassigned or held by lapsed members.
 - **Validate data quality** — detect duplicate plate and transponder numbers, possible duplicate member registrations, out-of-range race numbers, incorrect date formats, transponder format errors, and licence expiry mismatches.
 - **Edit records** — search by name, licence number, or club; update any field for a selected member.
 - **Save with formatting** — write the full in-memory database back to a new timestamped `.xlsx` file that preserves all original tabs, styles, and column widths. Stale-licence rows are highlighted amber. Family names are normalised to uppercase.
@@ -42,12 +42,14 @@ java -jar target/national-database-1.0.0-SNAPSHOT.jar
   2. Update Member              — Edit any field for a selected member record
   3. Re-run Validation          — Re-check the full database for data quality issues
   4. List All Members           — Browse all members in pages of 20
-  5. Bulk Update Race Numbers   — Paste a list of name/number pairs to set Plate 20 in bulk
-  6. Available Race Numbers     — List unassigned Plate 20 numbers and reclaimable stale assignments
+  5. Update Race Numbers        — Paste a list of name/number pairs to set Plate 20 in bulk
+  6. Available Race Numbers     — List unassigned Plate 20 numbers and reclaimable stale assignments; reclaim them
   7. Import Registration File   — Load a Cycling Ireland export and merge into the database
   8. Import Race Entries        — Load an EventMaster BookingDetails export and merge into the database; generate Sqorz timing CSV
-  9. Save Database              — Write all changes to a new timestamped .xlsx file
- 10. Exit
+  9. Incorporate Sqorz Member Changes — Apply rider detail changes reported back from Sqorz
+ 10. Save Database              — Write all changes to a new timestamped .xlsx file
+ 11. Allocate Race Numbers      — Paste BMX Application Form emails and assign Plate 20 numbers to matched riders
+ 12. Exit
 ```
 
 ## Validation
@@ -76,6 +78,20 @@ First Last  = 342
 ```
 
 Names are matched against the database using a flexible search (substring and normalised-space matching). Lines with no match, or where the name matches more than one member, are reported as skipped with a reason.
+
+## Allocating race numbers to new applications
+
+Option 11 accepts a paste of one or more "BMX Application Form" emails (as received at race.bmx@cyclingireland.ie). Enter a line containing only `END` when finished pasting.
+
+Each rider is matched to the database by an **exact, case-insensitive Cycling Ireland licence number** — there is no fallback name/DOB matching, since numbers may only be issued to riders already on file. A request is skipped, with a reason, when:
+
+- no licence number is present in the email
+- the licence number does not match any member
+- the matched member already has a Plate 20 number
+- the same rider appears more than once in the pasted batch
+- no unassigned numbers remain
+
+Matched riders are proposed the lowest available Plate 20 numbers, in the order they appear in the paste, so a batch of requests from the same club/session lands on consecutive numbers. Nothing is written until you review the proposed allocations and skipped entries and confirm.
 
 ## Importing a registration file
 
@@ -339,7 +355,7 @@ src/main/java/com/bmxireland/nationaldb/
     ├── DatabaseService.java           — xlsx read/write logic
     ├── DivisionLookupClassStrategy.java — Club Event: looks up each rider's division by name
     ├── EventMasterService.java        — EventMaster import and Sqorz CSV generation
-    ├── MemberService.java             — search, import, bulk update, available numbers
+    ├── MemberService.java             — search, import, bulk update, available/reclaim/allocate race numbers
     ├── RaceClassStrategy.java         — Strategy interface for Sqorz class resolution
     └── ValidationService.java         — data quality checks
 ```
