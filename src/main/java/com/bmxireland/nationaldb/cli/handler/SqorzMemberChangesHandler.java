@@ -16,10 +16,14 @@ import com.bmxireland.nationaldb.cli.InputUtils;
 import com.bmxireland.nationaldb.cli.MenuHandler;
 import com.bmxireland.nationaldb.cli.SessionState;
 import com.bmxireland.nationaldb.model.Member;
+import com.bmxireland.nationaldb.service.MemberService;
+import com.bmxireland.nationaldb.service.MemberService.SqorzNewRider;
+import com.bmxireland.nationaldb.service.MemberService.SqorzNewRidersResult;
 
 /**
- * Reads a Sqorz Member Changes CSV and applies plate/transponder/club updates
- * to matched members in the database. Members are matched by license number.
+ * Reads a Sqorz Member Changes CSV and applies plate/transponder/club updates to matched
+ * members ("changed" rows, matched by license number), and adds brand-new riders to the
+ * database ("new" rows).
  */
 @Component
 public class SqorzMemberChangesHandler implements MenuHandler {
@@ -28,10 +32,13 @@ public class SqorzMemberChangesHandler implements MenuHandler {
 
     private final SessionState session;
     private final ValidationHandler validationHandler;
+    private final MemberService memberService;
 
-    public SqorzMemberChangesHandler(SessionState session, ValidationHandler validationHandler) {
+    public SqorzMemberChangesHandler(SessionState session, ValidationHandler validationHandler,
+                                     MemberService memberService) {
         this.session = session;
         this.validationHandler = validationHandler;
+        this.memberService = memberService;
     }
 
     @Override
@@ -64,6 +71,10 @@ public class SqorzMemberChangesHandler implements MenuHandler {
         int idxClub         = findColumn(header, "club");
         int idxPlate20      = findColumn(header, "plate20");
         int idxTransponder20 = findColumn(header, "transponder20");
+        int idxFirstName    = findColumn(header, "firstName");
+        int idxLastName     = findColumn(header, "lastName");
+        int idxGender       = findColumn(header, "gender");
+        int idxBirthDate    = findColumn(header, "birthDate");
 
         if (idxMemberId < 0) {
             System.err.println("  ERROR: CSV is missing required 'memberId' column.");
@@ -75,12 +86,21 @@ public class SqorzMemberChangesHandler implements MenuHandler {
 
         List<AppliedChange> applied = new ArrayList<>();
         List<SkippedRow> skipped = new ArrayList<>();
+        List<SqorzNewRider> newRiders = new ArrayList<>();
         int unchanged = 0;
 
         for (int i = 1; i < rows.size(); i++) {
             String[] row = rows.get(i);
 
             String type = get(row, idxType);
+
+            if ("new".equalsIgnoreCase(type)) {
+                newRiders.add(new SqorzNewRider(
+                        get(row, idxMemberId), get(row, idxFirstName), get(row, idxLastName),
+                        get(row, idxGender), get(row, idxBirthDate), get(row, idxClub), get(row, idxPlate20)));
+                continue;
+            }
+
             if (!"changed".equalsIgnoreCase(type)) continue;
 
             String memberId = get(row, idxMemberId);
@@ -134,20 +154,37 @@ public class SqorzMemberChangesHandler implements MenuHandler {
             }
         }
 
+        SqorzNewRidersResult newRidersResult = memberService.addNewRidersFromSqorzChanges(session.getMembers(), newRiders);
+
         System.out.println("─────────────────────────────────────────────────────────────────");
         for (AppliedChange c : applied) {
             System.out.printf("  Updated  %-25s  %-16s '%s' -> '%s'%n",
                     c.member().getGivenName() + " " + c.member().getFamilyName(),
                     c.field() + ":", c.oldValue(), c.newValue());
         }
+        System.out.println("\n  ── Added (new riders) ──");
+        if (newRidersResult.added().isEmpty()) {
+            System.out.println("    None.");
+        } else {
+            for (Member m : newRidersResult.added()) {
+                System.out.printf("    %-25s  licence: %-12s  club: %s%n",
+                        m.getGivenName() + " " + m.getFamilyName(), m.getLicenseNumber(), m.getClubName());
+                log.info("Sqorz changes: added new rider {} [{}]", m.getGivenName() + " " + m.getFamilyName(), m.getLicenseNumber());
+            }
+        }
         for (SkippedRow s : skipped) {
             System.out.printf("  SKIPPED  %s — %s%n", s.memberId(), s.reason());
         }
-        System.out.printf("  Done. %d change(s) applied, %d unchanged, %d member(s) not found.%n",
-                applied.size(), unchanged, skipped.size());
+        for (SqorzNewRidersResult.SkippedRider s : newRidersResult.skipped()) {
+            System.out.printf("  SKIPPED  %s — %s%n", s.licenseNumber(), s.reason());
+            log.warn("Sqorz member changes: skipped new rider '{}' — {}", s.licenseNumber(), s.reason());
+        }
+        System.out.printf("  Done. %d change(s) applied, %d unchanged, %d new rider(s) added, %d skipped.%n",
+                applied.size(), unchanged, newRidersResult.added().size(),
+                skipped.size() + newRidersResult.skipped().size());
         System.out.println("═════════════════════════════════════════════════════════════════");
 
-        if (!applied.isEmpty()) {
+        if (!applied.isEmpty() || !newRidersResult.added().isEmpty()) {
             session.markChanged();
             System.out.println("\nRe-validating...");
             validationHandler.runInline();

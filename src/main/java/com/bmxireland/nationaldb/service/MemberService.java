@@ -464,6 +464,95 @@ public class MemberService {
                                    String licenseNumber, String reason) {}
     }
 
+    /** A single "new" rider row from a Sqorz Member Changes file. */
+    public record SqorzNewRider(
+            String licenseNumber, String firstName, String lastName,
+            String gender, String birthDate, String club, String plate20) {}
+
+    public record SqorzNewRidersResult(List<Member> added, List<SkippedRider> skipped) {
+        public record SkippedRider(String licenseNumber, String reason) {}
+    }
+
+    /**
+     * Adds brand-new riders reported in a Sqorz Member Changes file ("new" type rows)
+     * to the member list. Unlike {@link #importRegistrationData}, there is no matching
+     * step — these riders are not expected to already be in the database.
+     *
+     * License class is derived from date of birth, and license expiry from the licence
+     * number's two-digit year prefix, consistent with how other imports derive these
+     * fields. Country code defaults to "IRL".
+     *
+     * A rider is skipped, rather than added, when: the licence number is blank; a member
+     * with that licence number already exists; or both first and last name are blank.
+     */
+    public SqorzNewRidersResult addNewRidersFromSqorzChanges(List<Member> members, List<SqorzNewRider> riders) {
+        Set<String> existingLicenses = members.stream()
+                .map(Member::getLicenseNumber)
+                .filter(StringUtils::isNotBlank)
+                .map(l -> l.trim().toUpperCase())
+                .collect(Collectors.toCollection(HashSet::new));
+
+        List<Member> added = new ArrayList<>();
+        List<SqorzNewRidersResult.SkippedRider> skipped = new ArrayList<>();
+
+        for (SqorzNewRider rider : riders) {
+            if (StringUtils.isBlank(rider.licenseNumber())) {
+                skipped.add(new SqorzNewRidersResult.SkippedRider("(blank)", "No memberId provided"));
+                continue;
+            }
+            if (StringUtils.isBlank(rider.firstName()) && StringUtils.isBlank(rider.lastName())) {
+                skipped.add(new SqorzNewRidersResult.SkippedRider(rider.licenseNumber(), "Missing first and last name"));
+                continue;
+            }
+            String key = rider.licenseNumber().trim().toUpperCase();
+            if (!existingLicenses.add(key)) {
+                skipped.add(new SqorzNewRidersResult.SkippedRider(rider.licenseNumber(),
+                        "A member with this licence number already exists"));
+                continue;
+            }
+            added.add(buildMemberFromSqorzNewRider(rider, members.size() + added.size()));
+        }
+
+        members.addAll(added);
+        return new SqorzNewRidersResult(added, skipped);
+    }
+
+    private Member buildMemberFromSqorzNewRider(SqorzNewRider rider, int rowIndex) {
+        Member m = new Member();
+        m.setRowIndex(rowIndex);
+        m.setLicenseNumber(rider.licenseNumber().trim());
+        m.setGivenName(rider.firstName());
+        m.setFamilyName(capitalizeName(normalizeSeparators(rider.lastName())));
+        m.setGender(normalizeGender(rider.gender()));
+        m.setBirthDate(rider.birthDate());
+        m.setActive("Yes");
+        m.setLicenseClass(licenseClassFromDob(rider.birthDate()));
+        m.setLicenseExpiry(licenseExpiryFromLicenseNumber(rider.licenseNumber()));
+        m.setLicenseCountryCode("IRL");
+        m.setClubName(rider.club());
+        if (StringUtils.isNotBlank(rider.plate20())) {
+            m.setPlate20(rider.plate20().trim());
+        }
+        return m;
+    }
+
+    /**
+     * Derives a licence expiry date from a licence number's two-digit year prefix
+     * (e.g. "26U100381" -> "2026-12-31"), matching the rule enforced by
+     * {@link ValidationService#validateLicenseExpiryMatchesLicenseYear}.
+     * Returns null if the licence number does not start with a two-digit year prefix.
+     */
+    static String licenseExpiryFromLicenseNumber(String licenseNumber) {
+        if (licenseNumber == null) return null;
+        String l = licenseNumber.trim();
+        if (l.length() < 3) return null;
+        if (!Character.isDigit(l.charAt(0)) || !Character.isDigit(l.charAt(1)) || Character.isDigit(l.charAt(2))) {
+            return null;
+        }
+        int year = 2000 + Integer.parseInt(l.substring(0, 2));
+        return year + "-12-31";
+    }
+
     // ---- Private helpers ----
 
     private Member buildMember(RegistrationEntry entry, int rowIndex) {

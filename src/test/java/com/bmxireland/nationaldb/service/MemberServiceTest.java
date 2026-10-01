@@ -971,4 +971,84 @@ class MemberServiceTest {
         // International License field is never written by import
         assertEquals("EXISTING-MID", existing.getInternationalLicense());
     }
+
+    // ---- addNewRidersFromSqorzChanges ----
+
+    private MemberService.SqorzNewRider newRider(String licenseNumber, String firstName, String lastName,
+                                                   String gender, String birthDate, String club, String plate20) {
+        return new MemberService.SqorzNewRider(licenseNumber, firstName, lastName, gender, birthDate, club, plate20);
+    }
+
+    @Test
+    void addNewRiders_addsMemberWithDerivedFields() {
+        List<Member> members = new ArrayList<>();
+        var riders = List.of(newRider("26U100381", "Conal", "Barker-Keogh", "MALE", "2017-09-02", "Ratoath BMX", "997"));
+
+        var result = memberService.addNewRidersFromSqorzChanges(members, riders);
+
+        assertEquals(1, result.added().size());
+        assertEquals(0, result.skipped().size());
+        assertEquals(1, members.size());
+        Member added = members.get(0);
+        assertEquals("26U100381", added.getLicenseNumber());
+        assertEquals("Conal", added.getGivenName());
+        assertEquals("Barker-Keogh", added.getFamilyName());
+        assertEquals("M", added.getGender());
+        assertEquals("2017-09-02", added.getBirthDate());
+        assertEquals("Youth", added.getLicenseClass());
+        assertEquals("2026-12-31", added.getLicenseExpiry());
+        assertEquals("IRL", added.getLicenseCountryCode());
+        assertEquals("Ratoath BMX", added.getClubName());
+        assertEquals("997", added.getPlate20());
+        assertEquals("Yes", added.getActive());
+    }
+
+    @Test
+    void addNewRiders_blankPlate20_leftNull() {
+        List<Member> members = new ArrayList<>();
+        var riders = List.of(newRider("26U100272", "Sean", "Ianelli", "MALE", "2017-09-25", "Ratoath BMX", ""));
+
+        memberService.addNewRidersFromSqorzChanges(members, riders);
+
+        assertNull(members.get(0).getPlate20());
+    }
+
+    @Test
+    void addNewRiders_duplicateLicenseNumber_isSkipped() {
+        Member existing = member("26U100381", "Conal", "Barker-Keogh", null, null);
+        List<Member> members = new ArrayList<>(List.of(existing));
+        var riders = List.of(newRider("26U100381", "Conal", "Barker-Keogh", "MALE", "2017-09-02", "Ratoath BMX", "997"));
+
+        var result = memberService.addNewRidersFromSqorzChanges(members, riders);
+
+        assertEquals(0, result.added().size());
+        assertEquals(1, result.skipped().size());
+        assertTrue(result.skipped().get(0).reason().contains("already exists"));
+        assertEquals(1, members.size());
+    }
+
+    @Test
+    void addNewRiders_blankLicenseNumber_isSkipped() {
+        List<Member> members = new ArrayList<>();
+        var riders = List.of(newRider("", "Conal", "Barker-Keogh", "MALE", "2017-09-02", "Ratoath BMX", "997"));
+
+        var result = memberService.addNewRidersFromSqorzChanges(members, riders);
+
+        assertEquals(0, result.added().size());
+        assertEquals(1, result.skipped().size());
+        assertTrue(result.skipped().get(0).reason().contains("No memberId"));
+    }
+
+    @Test
+    void addNewRiders_duplicateWithinBatch_secondIsSkipped() {
+        List<Member> members = new ArrayList<>();
+        var riders = List.of(
+                newRider("26U100381", "Conal", "Barker-Keogh", "MALE", "2017-09-02", "Ratoath BMX", "997"),
+                newRider("26U100381", "Conal", "Barker-Keogh", "MALE", "2017-09-02", "Ratoath BMX", "997"));
+
+        var result = memberService.addNewRidersFromSqorzChanges(members, riders);
+
+        assertEquals(1, result.added().size());
+        assertEquals(1, result.skipped().size());
+    }
 }
