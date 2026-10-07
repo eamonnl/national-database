@@ -130,14 +130,20 @@ public class SqorzMemberChangesHandler implements MenuHandler {
             }
 
             if (!plate20.isEmpty()) {
-                String old = StringUtils.defaultString(member.getPlate20());
-                if (!plate20.equals(old)) {
-                    member.setPlate20(plate20);
-                    applied.add(new AppliedChange(member, "Plate 20", old, plate20));
-                    log.info("Sqorz changes: set Plate 20 for {} [{}]: '{}' -> '{}'",
-                            member.getGivenName() + " " + member.getFamilyName(), memberId, old, plate20);
+                if (!MemberService.isNumericPlate(plate20)) {
+                    skipped.add(new SkippedRow(memberId,
+                            "Plate 20 value '" + plate20 + "' is not numeric (likely a temporary club-racing plate) — ignored"));
+                    log.warn("Sqorz member changes: ignoring non-numeric Plate 20 '{}' for {}", plate20, memberId);
                 } else {
-                    unchanged++;
+                    String old = StringUtils.defaultString(member.getPlate20());
+                    if (!plate20.equals(old)) {
+                        member.setPlate20(plate20);
+                        applied.add(new AppliedChange(member, "Plate 20", old, plate20));
+                        log.info("Sqorz changes: set Plate 20 for {} [{}]: '{}' -> '{}'",
+                                member.getGivenName() + " " + member.getFamilyName(), memberId, old, plate20);
+                    } else {
+                        unchanged++;
+                    }
                 }
             }
 

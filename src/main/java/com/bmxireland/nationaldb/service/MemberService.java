@@ -3,9 +3,12 @@ package com.bmxireland.nationaldb.service;
 import com.bmxireland.nationaldb.model.Member;
 import com.bmxireland.nationaldb.model.RegistrationEntry;
 import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -25,6 +28,8 @@ import java.util.stream.Collectors;
  */
 @Service
 public class MemberService {
+
+    private static final Logger log = LoggerFactory.getLogger(MemberService.class);
 
     public static final String BULK_UPDATE_FIELD = "Plate 20";
     static final int STALE_LICENSE_YEARS = 3;
@@ -480,7 +485,12 @@ public class MemberService {
      *
      * License class is derived from date of birth, and license expiry from the licence
      * number's two-digit year prefix, consistent with how other imports derive these
-     * fields. Country code defaults to "IRL".
+     * fields. Country code defaults to "IRL". Date of birth is converted from Sqorz's
+     * DD/MM/YYYY format to the database's required YYYY-MM-DD format.
+     *
+     * Plate 20 is only carried over when it is purely numeric. Clubs sometimes report
+     * letter-prefixed codes (e.g. "LBMX13") for temporary club-racing plates — these are
+     * not real database plate assignments and must never be written to the member record.
      *
      * A rider is skipped, rather than added, when: the licence number is blank; a member
      * with that licence number already exists; or both first and last name are blank.
@@ -524,16 +534,51 @@ public class MemberService {
         m.setGivenName(rider.firstName());
         m.setFamilyName(capitalizeName(normalizeSeparators(rider.lastName())));
         m.setGender(normalizeGender(rider.gender()));
-        m.setBirthDate(rider.birthDate());
+        String birthDate = normalizeSqorzDate(rider.birthDate());
+        m.setBirthDate(birthDate);
         m.setActive("Yes");
-        m.setLicenseClass(licenseClassFromDob(rider.birthDate()));
+        m.setLicenseClass(licenseClassFromDob(birthDate));
         m.setLicenseExpiry(licenseExpiryFromLicenseNumber(rider.licenseNumber()));
         m.setLicenseCountryCode("IRL");
         m.setClubName(rider.club());
         if (StringUtils.isNotBlank(rider.plate20())) {
-            m.setPlate20(rider.plate20().trim());
+            String plate20 = rider.plate20().trim();
+            if (isNumericPlate(plate20)) {
+                m.setPlate20(plate20);
+            } else {
+                log.warn("Sqorz member changes: ignoring non-numeric Plate 20 '{}' for new rider '{}' " +
+                        "(likely a temporary club-racing plate)", plate20, rider.licenseNumber());
+            }
         }
         return m;
+    }
+
+    /**
+     * Plates must be purely numeric. Clubs sometimes use letter-prefixed codes
+     * (e.g. "LBMX13") for temporary club-racing plates — these must never be
+     * written into the member database.
+     */
+    public static boolean isNumericPlate(String plate) {
+        return plate != null && plate.matches("\\d+");
+    }
+
+    private static final DateTimeFormatter SQORZ_DATE_FORMAT = DateTimeFormatter.ofPattern("dd/MM/yyyy");
+
+    /**
+     * Converts a Sqorz Member Changes date of birth (DD/MM/YYYY) to the database's
+     * required YYYY-MM-DD format. Values already in YYYY-MM-DD, or that match neither
+     * format, are returned unchanged so {@link ValidationService#validateDateFormats}
+     * can flag them.
+     */
+    static String normalizeSqorzDate(String value) {
+        if (value == null) return null;
+        String trimmed = value.trim();
+        if (trimmed.isEmpty()) return trimmed;
+        try {
+            return LocalDate.parse(trimmed, SQORZ_DATE_FORMAT).toString();
+        } catch (DateTimeParseException ignored) {
+            return trimmed;
+        }
     }
 
     /**

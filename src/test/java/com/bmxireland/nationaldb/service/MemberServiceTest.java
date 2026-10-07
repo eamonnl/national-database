@@ -1051,4 +1051,46 @@ class MemberServiceTest {
         assertEquals(1, result.added().size());
         assertEquals(1, result.skipped().size());
     }
+
+    @Test
+    void addNewRiders_sqorzDobFormat_convertedToIsoAndClassDerived() {
+        List<Member> members = new ArrayList<>();
+        var riders = List.of(newRider("26LC1316", "Cian", "Pearson", "MALE", "23/06/1987", "Saint Annes BMX", "13"));
+
+        memberService.addNewRidersFromSqorzChanges(members, riders);
+
+        Member added = members.get(0);
+        assertEquals("1987-06-23", added.getBirthDate());
+        assertEquals("Adult", added.getLicenseClass());
+    }
+
+    @Test
+    void addNewRiders_letterPlate_isIgnoredNotStored() {
+        List<Member> members = new ArrayList<>();
+        var riders = List.of(newRider("27U80003", "Kilian", "Darcy", "MALE", "01/09/2019", "Lucan BMX", "LBMX7"));
+
+        var result = memberService.addNewRidersFromSqorzChanges(members, riders);
+
+        assertEquals(1, result.added().size());
+        assertEquals(0, result.skipped().size());
+        assertNull(members.get(0).getPlate20());
+    }
+
+    // ---- isNumericPlate ----
+
+    @Test
+    void isNumericPlate_digitsOnly_true() {
+        assertTrue(MemberService.isNumericPlate("123"));
+    }
+
+    @Test
+    void isNumericPlate_letterPrefixed_false() {
+        assertFalse(MemberService.isNumericPlate("LBMX13"));
+    }
+
+    @Test
+    void isNumericPlate_blankOrNull_false() {
+        assertFalse(MemberService.isNumericPlate(""));
+        assertFalse(MemberService.isNumericPlate(null));
+    }
 }

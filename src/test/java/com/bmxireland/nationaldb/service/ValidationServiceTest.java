@@ -86,6 +86,28 @@ class ValidationServiceTest {
         assertTrue(validationService.validateRaceNumberRange(List.of(m)).isEmpty());
     }
 
+    // ---- validatePlateNumbersAreNumeric ----
+
+    @Test
+    void plateNumeric_digitsOnly_noIssue() {
+        Member m = member("LIC001", "Alice", "Smith", "1990-01-01", null, "123", null);
+        assertTrue(validationService.validatePlateNumbersAreNumeric(List.of(m)).isEmpty());
+    }
+
+    @Test
+    void plateNumeric_letterPrefixed_flagged() {
+        Member m = member("LIC001", "Alice", "Smith", "1990-01-01", null, "LBMX13", null);
+        var issues = validationService.validatePlateNumbersAreNumeric(List.of(m));
+        assertEquals(1, issues.size());
+        assertEquals("INVALID PLATE FORMAT", issues.get(0).category());
+    }
+
+    @Test
+    void plateNumeric_blank_ignored() {
+        Member m = member("LIC001", "Alice", "Smith", "1990-01-01", null, null, null);
+        assertTrue(validationService.validatePlateNumbersAreNumeric(List.of(m)).isEmpty());
+    }
+
     // ---- validateNoDuplicateRaceNumbers ----
 
     @Test

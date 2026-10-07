@@ -60,6 +60,7 @@ public class ValidationService {
         reclaimed.addAll(plateCheck.reclaimed());
 
         issues.addAll(validateRaceNumberRange(members));
+        issues.addAll(validatePlateNumbersAreNumeric(members));
         issues.addAll(validateNoDuplicateTransponderNumbers(members));
         issues.addAll(validateNoPossibleDuplicateMembers(members));
         issues.addAll(validateLicenseExpiryMatchesLicenseYear(members));
@@ -130,7 +131,38 @@ public class ValidationService {
                             List.of(m)));
                 }
             } catch (NumberFormatException ignored) {
-                // non-numeric values are handled elsewhere
+                // non-numeric values are flagged by validatePlateNumbersAreNumeric
+            }
+        }
+    }
+
+    /**
+     * Validates that all plate numbers contain only digits. Clubs sometimes use
+     * letter-prefixed codes (e.g. "LBMX13") for temporary club-racing plates — these
+     * must never persist in the member database.
+     */
+    public List<ValidationIssue> validatePlateNumbersAreNumeric(List<Member> members) {
+        List<ValidationIssue> issues = new ArrayList<>();
+
+        checkPlateIsNumeric(members, "Plate 20",    Member::getPlate20,    issues);
+        checkPlateIsNumeric(members, "Plate 24",    Member::getPlate24,    issues);
+        checkPlateIsNumeric(members, "Plate Retro", Member::getPlateRetro, issues);
+        checkPlateIsNumeric(members, "Plate Open",  Member::getPlateOpen,  issues);
+
+        return issues;
+    }
+
+    private void checkPlateIsNumeric(List<Member> members, String fieldName,
+                                     FieldExtractor extractor, List<ValidationIssue> issues) {
+        for (Member m : members) {
+            String value = extractor.extract(m);
+            if (isBlankOrNone(value)) continue;
+            if (!MemberService.isNumericPlate(value.trim())) {
+                issues.add(new ValidationIssue(
+                        "INVALID PLATE FORMAT",
+                        String.format("%s value '%s' must be numeric only (letter codes are used for " +
+                                "temporary club-racing plates and must not be stored)", fieldName, value.trim()),
+                        List.of(m)));
             }
         }
     }
