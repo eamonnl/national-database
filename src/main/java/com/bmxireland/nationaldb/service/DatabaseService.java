@@ -48,7 +48,7 @@ public class DatabaseService {
 
     private static final Logger log = LoggerFactory.getLogger(DatabaseService.class);
     private static final String HEADER_DELIMITER = "****************";
-    private static final int EXPECTED_COLUMNS = 28;
+    private static final int EXPECTED_COLUMNS = 31;
 
     @Value("${database.file.path:MemberDatabase.xlsx}")
     private String databaseFilePath;
@@ -63,6 +63,7 @@ public class DatabaseService {
     private int membersSheetIndex;
     private int dataStartRowIndex;
     List<String> validGroupNames = new ArrayList<>();
+    private List<String> headerWarnings = List.of();
 
     /**
      * Loads members from the xlsx file, validating the header structure.
@@ -121,6 +122,9 @@ public class DatabaseService {
 
         log.info("Column headers at row {}", columnHeaderIndex + 1);
 
+        headerWarnings = validateColumnHeaders(sheet.getRow(columnHeaderIndex));
+        headerWarnings.forEach(w -> log.warn("Member database header mismatch: {}", w));
+
         // Data rows start after the column header row
         dataStartRowIndex = columnHeaderIndex + 1;
         int dataStartRow = dataStartRowIndex;
@@ -141,6 +145,43 @@ public class DatabaseService {
         log.info("Loaded {} members from database", members.size());
         loadGroupNames();
         return members;
+    }
+
+    /**
+     * Returns warnings produced by the header check on the most recently loaded
+     * database (empty if the column headers match the expected layout).
+     */
+    public List<String> getHeaderWarnings() {
+        return headerWarnings;
+    }
+
+    /**
+     * Compares the Members sheet column headers with the layout this application
+     * reads and writes by position. The file may be downloaded from another
+     * application, edited here and re-uploaded, so a changed layout would otherwise
+     * silently shift values into the wrong columns on save.
+     *
+     * @return one message per difference (empty if the headers match exactly)
+     */
+    List<String> validateColumnHeaders(Row headerRow) {
+        List<String> expected = getFieldNames();
+        List<String> warnings = new ArrayList<>();
+        for (int c = 0; c < Math.max(expected.size(), EXPECTED_COLUMNS); c++) {
+            String exp = c < expected.size() ? expected.get(c) : "";
+            String act = StringUtils.trimToEmpty(getCellStringValue(headerRow == null ? null : headerRow.getCell(c)));
+            if (!exp.equalsIgnoreCase(act)) {
+                warnings.add(String.format("column %d: expected '%s' but found '%s'", c + 1, exp, act));
+            }
+        }
+        if (headerRow != null) {
+            for (int c = EXPECTED_COLUMNS; c < headerRow.getLastCellNum(); c++) {
+                String act = StringUtils.trimToEmpty(getCellStringValue(headerRow.getCell(c)));
+                if (!act.isEmpty()) {
+                    warnings.add(String.format("column %d: unexpected extra column '%s'", c + 1, act));
+                }
+            }
+        }
+        return warnings;
     }
 
     /**
@@ -358,6 +399,7 @@ public class DatabaseService {
             case "transponder 24" -> member.setTransponder24(newValue);
             case "transponder retro" -> member.setTransponderRetro(newValue);
             case "transponder open" -> member.setTransponderOpen(newValue);
+            case "transponder road" -> member.setTransponderRoad(newValue);
             case "license country code" -> member.setLicenseCountryCode(newValue);
             case "international license" -> member.setInternationalLicense(newValue);
             case "club name" -> member.setClubName(newValue);
@@ -370,6 +412,8 @@ public class DatabaseService {
             case "cc email" -> member.setCcEmail(newValue);
             case "emergency contact person" -> member.setEmergencyContactPerson(newValue);
             case "emergency contact number" -> member.setEmergencyContactNumber(newValue);
+            case "suspension" -> member.setSuspension(newValue);
+            case "suspension end date" -> member.setSuspensionEndDate(newValue);
             default -> {
                 return false;
             }
@@ -385,12 +429,13 @@ public class DatabaseService {
                 "License Number", "License Class", "License Expiry",
                 "Given Name", "Family Name", "Birth Date", "Gender", "Active",
                 "Plate 20", "Plate 24", "Plate Retro", "Plate Open",
-                "Transponder 20", "Transponder 24", "Transponder Retro", "Transponder Open",
+                "Transponder 20", "Transponder 24", "Transponder Retro", "Transponder Open", "Transponder Road",
                 "License Country Code", "International License",
                 "Club Name",
                 "Team Name 1", "Team Name 2", "Team Name 3", "Team Name 4", "Team Name 5",
                 "Email", "CC Email",
-                "Emergency Contact Person", "Emergency Contact Number");
+                "Emergency Contact Person", "Emergency Contact Number",
+                "Suspension", "Suspension End Date");
     }
 
     /**
@@ -414,6 +459,7 @@ public class DatabaseService {
             case "transponder 24" -> member.getTransponder24();
             case "transponder retro" -> member.getTransponderRetro();
             case "transponder open" -> member.getTransponderOpen();
+            case "transponder road" -> member.getTransponderRoad();
             case "license country code" -> member.getLicenseCountryCode();
             case "international license" -> member.getInternationalLicense();
             case "club name" -> member.getClubName();
@@ -426,6 +472,8 @@ public class DatabaseService {
             case "cc email" -> member.getCcEmail();
             case "emergency contact person" -> member.getEmergencyContactPerson();
             case "emergency contact number" -> member.getEmergencyContactNumber();
+            case "suspension" -> member.getSuspension();
+            case "suspension end date" -> member.getSuspensionEndDate();
             default -> null;
         };
     }
@@ -451,18 +499,21 @@ public class DatabaseService {
         m.setTransponder24(getCellStringValue(row.getCell(13)));
         m.setTransponderRetro(getCellStringValue(row.getCell(14)));
         m.setTransponderOpen(getCellStringValue(row.getCell(15)));
-        m.setLicenseCountryCode(getCellStringValue(row.getCell(16)));
-        m.setInternationalLicense(getCellStringValue(row.getCell(17)));
-        m.setClubName(getCellStringValue(row.getCell(18)));
-        m.setTeamName1(getCellStringValue(row.getCell(19)));
-        m.setTeamName2(getCellStringValue(row.getCell(20)));
-        m.setTeamName3(getCellStringValue(row.getCell(21)));
-        m.setTeamName4(getCellStringValue(row.getCell(22)));
-        m.setTeamName5(getCellStringValue(row.getCell(23)));
-        m.setEmail(getCellStringValue(row.getCell(24)));
-        m.setCcEmail(getCellStringValue(row.getCell(25)));
-        m.setEmergencyContactPerson(getCellStringValue(row.getCell(26)));
-        m.setEmergencyContactNumber(getCellStringValue(row.getCell(27)));
+        m.setTransponderRoad(getCellStringValue(row.getCell(16)));
+        m.setLicenseCountryCode(getCellStringValue(row.getCell(17)));
+        m.setInternationalLicense(getCellStringValue(row.getCell(18)));
+        m.setClubName(getCellStringValue(row.getCell(19)));
+        m.setTeamName1(getCellStringValue(row.getCell(20)));
+        m.setTeamName2(getCellStringValue(row.getCell(21)));
+        m.setTeamName3(getCellStringValue(row.getCell(22)));
+        m.setTeamName4(getCellStringValue(row.getCell(23)));
+        m.setTeamName5(getCellStringValue(row.getCell(24)));
+        m.setEmail(getCellStringValue(row.getCell(25)));
+        m.setCcEmail(getCellStringValue(row.getCell(26)));
+        m.setEmergencyContactPerson(getCellStringValue(row.getCell(27)));
+        m.setEmergencyContactNumber(getCellStringValue(row.getCell(28)));
+        m.setSuspension(getCellStringValue(row.getCell(29)));
+        m.setSuspensionEndDate(getCellStringValue(row.getCell(30)));
         return m;
     }
 
@@ -483,18 +534,21 @@ public class DatabaseService {
         setCellValue(row, 13, m.getTransponder24());
         setCellValue(row, 14, m.getTransponderRetro());
         setCellValue(row, 15, m.getTransponderOpen());
-        setCellValue(row, 16, m.getLicenseCountryCode());
-        setCellValue(row, 17, m.getInternationalLicense());
-        setCellValue(row, 18, resolveClubName(m.getClubName()));
-        setCellValue(row, 19, m.getTeamName1());
-        setCellValue(row, 20, m.getTeamName2());
-        setCellValue(row, 21, m.getTeamName3());
-        setCellValue(row, 22, m.getTeamName4());
-        setCellValue(row, 23, m.getTeamName5());
-        setCellValue(row, 24, m.getEmail());
-        setCellValue(row, 25, m.getCcEmail());
-        setCellValue(row, 26, m.getEmergencyContactPerson());
-        setCellValue(row, 27, normalizePhoneNumber(m.getEmergencyContactNumber()));
+        setCellValue(row, 16, m.getTransponderRoad());
+        setCellValue(row, 17, m.getLicenseCountryCode());
+        setCellValue(row, 18, m.getInternationalLicense());
+        setCellValue(row, 19, resolveClubName(m.getClubName()));
+        setCellValue(row, 20, m.getTeamName1());
+        setCellValue(row, 21, m.getTeamName2());
+        setCellValue(row, 22, m.getTeamName3());
+        setCellValue(row, 23, m.getTeamName4());
+        setCellValue(row, 24, m.getTeamName5());
+        setCellValue(row, 25, m.getEmail());
+        setCellValue(row, 26, m.getCcEmail());
+        setCellValue(row, 27, m.getEmergencyContactPerson());
+        setCellValue(row, 28, normalizePhoneNumber(m.getEmergencyContactNumber()));
+        setCellValue(row, 29, m.getSuspension());
+        setCellValue(row, 30, m.getSuspensionEndDate());
     }
 
     String getCellStringValue(Cell cell) {

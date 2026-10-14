@@ -3,6 +3,7 @@ package com.bmxireland.nationaldb.cli;
 import java.io.IOException;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.List;
 import java.util.Scanner;
 
 import org.slf4j.Logger;
@@ -85,6 +86,13 @@ public class DatabaseCommandLineRunner implements CommandLineRunner {
         }
 
         System.out.printf("\nLoaded %d members from database.%n", session.getMembers().size());
+        List<String> headerWarnings = databaseService.getHeaderWarnings();
+        if (!headerWarnings.isEmpty()) {
+            System.out.println("\n*** WARNING: the Members sheet column headers differ from the expected layout. ***");
+            headerWarnings.forEach(w -> System.out.println("  - " + w));
+            System.out.println("Data is read and written by column position, so saving may put values in the wrong columns.");
+            System.out.println("Check the file's columns before saving.");
+        }
         validationHandler.handle(scanner);
 
         boolean running = true;

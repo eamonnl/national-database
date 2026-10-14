@@ -31,6 +31,7 @@ public class Member {
     private String transponder24;
     private String transponderRetro;
     private String transponderOpen;
+    private String transponderRoad;
 
     // Additional fields
     private String licenseCountryCode;
@@ -45,6 +46,8 @@ public class Member {
     private String ccEmail;
     private String emergencyContactPerson;
     private String emergencyContactNumber;
+    private String suspension;
+    private String suspensionEndDate;
 
     public Member() {
     }
@@ -57,6 +60,30 @@ public class Member {
 
     public void setRowIndex(int rowIndex) {
         this.rowIndex = rowIndex;
+    }
+
+    public String getTransponderRoad() {
+        return transponderRoad;
+    }
+
+    public void setTransponderRoad(String transponderRoad) {
+        this.transponderRoad = transponderRoad;
+    }
+
+    public String getSuspension() {
+        return suspension;
+    }
+
+    public void setSuspension(String suspension) {
+        this.suspension = suspension;
+    }
+
+    public String getSuspensionEndDate() {
+        return suspensionEndDate;
+    }
+
+    public void setSuspensionEndDate(String suspensionEndDate) {
+        this.suspensionEndDate = suspensionEndDate;
     }
 
     public String getLicenseNumber() {
