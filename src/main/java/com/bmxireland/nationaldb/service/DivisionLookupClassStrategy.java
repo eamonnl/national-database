@@ -1,5 +1,7 @@
 package com.bmxireland.nationaldb.service;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -32,8 +34,8 @@ public class DivisionLookupClassStrategy implements RaceClassStrategy {
 
     @Override
     public ClassResolution resolve(BookingEntry entry, Member member) {
-        // Adults always race in M1 (Rhythm Masters) regardless of club ability divisions
-        if (entry.ageGroupAdult() != null && !entry.ageGroupAdult().isBlank()) {
+        // Masters (over 29) always race in M1 (Rhythm Masters) regardless of club ability divisions
+        if (isMaster(entry, member)) {
             return new ClassResolution(ClubDivision.M1.divisionName(), null);
         }
 
@@ -53,6 +55,30 @@ public class DivisionLookupClassStrategy implements RaceClassStrategy {
         String displayName = (entry.firstName() + " " + entry.lastName()).trim();
         unmatchedRiders.add(displayName);
         return new ClassResolution(ClubDivision.D0.divisionName(), null);
+    }
+
+    /** Riders aged this many years or more (current year minus birth year) race Rhythm Masters. */
+    private static final int MASTERS_MIN_AGE = 30;
+
+    /**
+     * A rider is a master if their age (current year minus birth year) is over 29. Ability-based
+     * bookings carry no age group columns, so the date of birth is used first (booking, then
+     * member record). Only when no DOB is available do we fall back to the booking's adult age
+     * group, the member's licence class, or the CI rider category.
+     */
+    private static boolean isMaster(BookingEntry entry, Member member) {
+        String dob = entry.dateOfBirth();
+        if ((dob == null || dob.isBlank()) && member != null) dob = member.getBirthDate();
+        if (dob != null && !dob.isBlank()) {
+            try {
+                return LocalDate.now().getYear() - LocalDate.parse(dob.trim()).getYear() >= MASTERS_MIN_AGE;
+            } catch (DateTimeParseException ignored) {
+                // fall through to the category-based checks
+            }
+        }
+        if (entry.ageGroupAdult() != null && !entry.ageGroupAdult().isBlank()) return true;
+        if (member != null && "Adult".equalsIgnoreCase(member.getLicenseClass())) return true;
+        return "Adult".equals(MemberService.mapLicenseClass(entry.riderCategory()));
     }
 
     /** Returns the names of riders who were not found in the division map. */
