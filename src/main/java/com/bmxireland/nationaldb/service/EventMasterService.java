@@ -240,7 +240,7 @@ public class EventMasterService {
 
                     if (licenceChanged) {
                         match.setLicenseNumber(entry.licenseNumber().trim());
-                        match.setLicenseExpiry(LocalDate.now().getYear() + "-12-31");
+                        match.setLicenseExpiry(expiryForLicence(entry.licenseNumber()));
                         session.refreshIndices(match, entry.licenseNumber(), null);
                     }
 
@@ -464,9 +464,9 @@ public class EventMasterService {
             m.setTransponder20(entry.transponderNumber().trim());
         }
 
-        // Booking entries don't carry an expiry date; default to 31 Dec of the current year
-        // since the rider is actively booking for an event and must hold a valid licence.
-        m.setLicenseExpiry(LocalDate.now().getYear() + "-12-31");
+        // Booking entries don't carry an expiry date; derive it from the licence year prefix
+        // (e.g. "27U..." -> 2027-12-31), falling back to the current year.
+        m.setLicenseExpiry(expiryForLicence(entry.licenseNumber()));
 
         if (StringUtils.isNotBlank(entry.uciId())) {
             m.setInternationalLicense(entry.uciId().trim());
@@ -584,5 +584,10 @@ public class EventMasterService {
             return "\"" + value.replace("\"", "\"\"") + "\"";
         }
         return value;
+    }
+
+    private static String expiryForLicence(String licenseNumber) {
+        String derived = MemberService.licenseExpiryFromLicenseNumber(licenseNumber);
+        return derived != null ? derived : LocalDate.now().getYear() + "-12-31";
     }
 }
